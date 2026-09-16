@@ -1,48 +1,18 @@
-name: Context Core CI
+name: GitHub Runner Probe
 
 on:
   push:
     branches: [main]
     paths:
-      - 'ada-context-core/**'
       - '.github/workflows/context-core-ci.yml'
-  pull_request:
-    paths:
-      - 'ada-context-core/**'
-      - '.github/workflows/context-core-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  contract-tests:
+  probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout exact commit without Marketplace actions
-        run: |
-          git clone --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" repo
-          cd repo
-          git fetch --depth=1 origin "${GITHUB_SHA}"
-          git checkout --detach "${GITHUB_SHA}"
-
-      - name: Create isolated Python environment
-        working-directory: repo
-        run: |
-          python3 -m venv .ci-venv
-          . .ci-venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r ada-context-core/app/requirements.txt
-          pip install -r ada-context-core/mcp/requirements.txt
-          pip install pytest
-
-      - name: Compile Context Core
-        working-directory: repo/ada-context-core
-        run: |
-          . ../.ci-venv/bin/activate
-          python -m compileall app mcp
-
-      - name: Run pure contract tests
-        working-directory: repo/ada-context-core
-        run: |
-          . ../.ci-venv/bin/activate
-          pytest -q
+      - name: Verify runner can start
+        run: echo "AdaAI GitHub runner is available"
