@@ -1,0 +1,10 @@
+{
+  "count": 5763,
+  "min_id": 6739,
+  "max_id": 13521,
+  "min_date": "2018-05-03",
+  "max_date": "2026-09-15",
+  "nonempty": 5388,
+  "method": "full_prev_walk",
+  "pages_walked": 300
+}

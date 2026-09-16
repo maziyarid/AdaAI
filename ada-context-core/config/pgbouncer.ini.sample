@@ -1,0 +1,11 @@
+[databases]
+ada_db = host=127.0.0.1 port=5432 dbname=ada_db
+
+[pgbouncer]
+listen_addr = 127.0.0.1
+listen_port = 6432
+pool_mode = transaction
+default_pool_size = 8
+reserve_pool_size = 2
+max_client_conn = 200
+server_reset_query = DISCARD ALL

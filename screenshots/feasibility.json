@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/tools/feasibility",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Qalam — کارگاه نگارش",
+      "hasCanvas": false,
+      "bodyTextLen": 1452,
+      "bodyTextHash": "0c460208f3412f29f316d7dc7b008d404a8948fddf9a834c42f112c8e47afb97",
+      "bodyTextPrefix": "رفتن به محتوا Qalam ابزار تصمیم نگارش کارخانه همه ابزارها انتخاب",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/feasibility.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Qalam — کارگاه نگارش",
+      "hasCanvas": false,
+      "bodyTextLen": 1452,
+      "bodyTextHash": "0c460208f3412f29f316d7dc7b008d404a8948fddf9a834c42f112c8e47afb97",
+      "bodyTextPrefix": "رفتن به محتوا Qalam ابزار تصمیم نگارش کارخانه همه ابزارها انتخاب",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/feasibility-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/feasibility.json"
+}

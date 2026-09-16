@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/factory",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Qalam — کارگاه نگارش",
+      "hasCanvas": false,
+      "bodyTextLen": 2815,
+      "bodyTextHash": "1675dcc889a1afaaaac4ad8b0d653b69b0a07e8f272bfd71be956d4e71181bb7",
+      "bodyTextPrefix": "Qalam حافظه سئو نگارش کارخانه داشبورد پیکره سئو دفتر تجربه تعارض",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/factory.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Qalam — کارگاه نگارش",
+      "hasCanvas": false,
+      "bodyTextLen": 2815,
+      "bodyTextHash": "1675dcc889a1afaaaac4ad8b0d653b69b0a07e8f272bfd71be956d4e71181bb7",
+      "bodyTextPrefix": "Qalam حافظه سئو نگارش کارخانه داشبورد پیکره سئو دفتر تجربه تعارض",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/factory-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/factory.json"
+}

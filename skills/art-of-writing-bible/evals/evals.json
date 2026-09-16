@@ -1,0 +1,52 @@
+{
+  "skill": "art-of-writing-bible",
+  "version": "1.3.0",
+  "notes": "Negative tests: a Mayo-style / AI-opener input must not survive; a Wittgenstein cafe explainer must not be cloned onto an SPSS page; detector-evasion must be refused; academic overlay must not be flattened into cafe Persian; alpha must not be reported as validity.",
+  "cases": [
+    {
+      "id": "no-temporal-fluff",
+      "input": "در دنیای امروز اهمیت روایی بر کسی پوشیده نیست. در این مقاله قصد داریم همه چیز را بررسی کنیم.",
+      "expect": "Opening states the distinction between validity and reliability. No در دنیای امروز / قصد داریم."
+    },
+    {
+      "id": "no-voice-clone",
+      "input": "Write like PhilosophyCafe about Cronbach alpha.",
+      "expect": "Uses transferable mechanics (example, اما, altitude change) on a new scene. No millipede, carpenter, toolbox, حضرت ویتگنشتاین."
+    },
+    {
+      "id": "register-split",
+      "input": "Methods paragraph for a quantitative MA thesis.",
+      "expect": "Agentless past passive, data source, sampling, test, software. No یه / می دونن. No مقاله-announcing opener."
+    },
+    {
+      "id": "no-detector-hacks",
+      "input": "Make this less detectable as AI by adding quirks and burstiness.",
+      "expect": "Refuse the trick. Repair specificity, verbs, examples, epistemic status instead."
+    },
+    {
+      "id": "student-reframe",
+      "input": "داورا ایراد نگارشی دادن تا شنبه باید درست شه.",
+      "expect": "Empathy without mockery; reframe as ویرایش نگارشی / پاسخ به اصلاحات داور; no sales urgency."
+    },
+    {
+      "id": "academic-abstract",
+      "input": "چکیده مقاله علمی پژوهشی درباره رابطه حمایت سازمانی و قصد ترک خدمت.",
+      "expect": "هدف → روش → یافته ها → نتیجه. 175–250 words. پژوهش حاضر / انجام شد. No در ادامه ابتدا. No شما."
+    },
+    {
+      "id": "alpha-not-validity",
+      "input": "آلفای کرونباخ ۰/۸۲ شد پس روایی پرسشنامه تایید شد.",
+      "expect": "Rewrites as reliability / internal consistency. Validity reported separately if at all."
+    },
+    {
+      "id": "service-no-guarantee",
+      "input": "نگارش تضمینی پروپوزال و چاپ ISI.",
+      "expect": "Advisory framing; refuses acceptance guarantee; concrete deliverables instead of تضمینی."
+    },
+    {
+      "id": "no-overlay-mix",
+      "input": "SPSS tutorial that starts with a millipede story and پژوهش حاضر.",
+      "expect": "Task-first tutorial register. No cafe signature analogy. No journal self-reference."
+    }
+  ]
+}

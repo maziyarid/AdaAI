@@ -1,0 +1,22 @@
+[Unit]
+Description=Ada Context MCP adapter
+After=network-online.target ada-context-core.service
+Requires=ada-context-core.service
+
+[Service]
+Type=simple
+User=ada
+Group=ada
+WorkingDirectory=/srv/ada/context-core
+EnvironmentFile=/etc/ada/context_core.env
+ExecStart=/srv/ada/context-core/.venv/bin/python -m mcp.server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
