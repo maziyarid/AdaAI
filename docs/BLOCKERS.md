@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **code + tests complete in repo. Production import and canary not executed.**
+Status: **code + tests complete in repo (binding hardenings applied). Production import and canary not executed.**
 
 ## Blocker 1 — no live VPS / SentinelX access
 
@@ -28,9 +28,19 @@ Until then the adapter in `runtime/control-core-baseline/adapter.py` is a client
 
 Mission text says “Art of Writing Bible v1.4”. Canonical file in archive/agents is `skills/art-of-writing-bible/SKILL.md` **version 2.0.0** dated 2026-09-16, with history 1.0.0–1.3.0 preserved. We mirrored what exists. We did not invent a v1.4 document.
 
+## Resolved this session (2026-09-16)
+
+Greptile review findings on unbound artifacts:
+
+- Authorization now binds passport → agent, receipt → agent/task/site/payload/mutation/passport.
+- Mutation journal requires authorize() decision; apply refuses unbound journals.
+- Approval tickets cannot escape receipt site/task scope.
+- Snapshot-bound approvals fail closed when snapshot_hash is omitted at consume time.
+- Regression tests added; **28 pytest cases passing**.
+
 ## Non-blockers (done)
 
-- 18 required contract tests + extras: passing locally.
+- 18 required contract tests + binding extras: passing locally.
 - MariaDB additive SQL written, not applied.
 - Qalam router, Bible, fa-IR UX, lexicon, medical overlay, Teznevise ZWNJ overlay mirrored with sha256.
 - Deterministic authorize / approval / journal / ZWNJ validator / shadow adapter implemented.
