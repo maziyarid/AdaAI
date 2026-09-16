@@ -1,0 +1,13 @@
+[project]
+name = "ada-reliability"
+version = "0.1.0"
+description = "Phase-1 Ada reliability layer around the live MariaDB control core"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
