@@ -1,1 +1,1 @@
-PLACEHOLDER
+"""Deterministic Ada reliability engine.\n\nPLACEHOLDER_WILL_BE_REPLACED\n"""\n
