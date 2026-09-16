@@ -16,7 +16,8 @@ Core rule:
 
 - `ada-context-core/` — authoritative PostgreSQL memory, task state, scoped receipts, approval tickets, mutation journal, MCP adapter, backup/recovery tooling, tests.
 - `docs/GOOGLE-CLOUD-NO-BILLING.md` — Google services that can help development without requiring a billing account/payment method, plus exclusions.
-- `.github/workflows/context-core-ci.yml` — contract/compile checks for Context Core.
+- `docs/VPS-DEPLOYMENT.md` — conservative production deployment sequence for the existing VPS.
+- `docs/CI.md` — current test/CI status and the GitHub-hosted-runner blocker.
 - `AGENTS.md` — mandatory contributor/agent operating rules.
 
 The original Grok export is preserved on branch `archive/grok-export-2026-09-16` and is not part of the production architecture.
@@ -37,7 +38,7 @@ Qalam / workers
     -> PostgreSQL authoritative state
 ```
 
-Recommended server path: `/srv/ada-ai/context-core`.
+Recommended server path: `/srv/ada/context-core`.
 
 Do not expose port `8791` publicly.
 
@@ -51,4 +52,8 @@ Do not expose port `8791` publicly.
 6. Run one low-risk Teznevise canary with independent live verification.
 7. Only after that, benchmark local models with AdaEval.
 
-See `ada-context-core/README.md` and `ada-context-core/docs/PLAN.md` for details.
+## Tests
+
+The Context Core contract suite currently passes locally. Until GitHub-hosted Actions can start jobs for this repository, use the commands documented in `docs/CI.md` and `ada-context-core/README.md`.
+
+See `ada-context-core/README.md` and `ada-context-core/docs/PLAN.md` for implementation details.
