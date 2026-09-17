@@ -1031,10 +1031,13 @@ class AdaEngine:
             or expected.get("zwnj_rule") == "zero"
         )
         verified_requirements = {}
-        if "http_status" in expected:
-            if live.http_status != expected["http_status"]:
-                failures.append("http_status")
-            verified_requirements["http_status"] = expected["http_status"]
+        # HTTP success is mandatory. Omitting http_status means require 200;
+        # a 404/500 resource must never verify or close just because other
+        # expected fields happen to match.
+        required_status = expected["http_status"] if "http_status" in expected else 200
+        if live.http_status != required_status:
+            failures.append("http_status")
+        verified_requirements["http_status"] = required_status
         if "meta" in expected:
             for k, v in expected["meta"].items():
                 if live.meta.get(k) != v:
@@ -1044,12 +1047,15 @@ class AdaEngine:
             if live.content != expected["content"]:
                 failures.append("content")
             verified_requirements["content"] = expected["content"]
-        if "zwnj_rule" in expected and zwnj_applied:
+        # Teznevise always runs the zero-ZWNJ check; callers that name
+        # zwnj_rule also get it recorded as a proven requirement.
+        if zwnj_applied:
             blob = live.content + " " + " ".join(str(x) for x in live.meta.values())
             ok, n = self.teznevise_zwnj_ok(blob)
             if not ok:
-                failures.append(f"teznevise_zwnjj:{n}")
-            verified_requirements["zwnj_rule"] = expected["zwnj_rule"]
+                failures.append(f"teznevise_zwnj:{n}")
+            if "zwnj_rule" in expected:
+                verified_requirements["zwnj_rule"] = expected["zwnj_rule"]
         vid = self._id()
         rec = {
             "id": vid, "site_id": site_id, "resource_id": resource_id,
@@ -1191,6 +1197,14 @@ class AdaEngine:
         live_now = self.wp.read(j["site_id"], j["resource_id"])
         if not live_now or live_now.snapshot_hash() != qualifying["live_hash"]:
             raise AdaError("STALE_VERIFICATION", "resource changed after qualifying verification")
+        # Fail-closed HTTP-success bound: even if the journal omitted
+        # http_status, a non-success live response cannot complete the task.
+        required_http = postcondition.get("http_status", 200)
+        if live_now.http_status != required_http:
+            raise AdaError(
+                "POSTCONDITION_NOT_PROVEN",
+                "live http_status does not satisfy required success",
+            )
         j["status"] = "VERIFIED"
         self.tasks[task_id]["state"] = "COMPLETED"
         return {"state": "COMPLETED", "verification": qualifying}

@@ -11,10 +11,17 @@ Covers AAX-2 P1 "Journaled Postcondition Is Ignored":
   G. prior pre-mutation verification remains unusable
   H. approved publish end-to-end (grant -> journal -> apply -> verify -> close)
      remains green
+  I-M. unsupported postcondition keys fail closed (canonical/language)
+  N. omitted http_status still rejects a 404/500 live resource
+  N2. omitted http_status still closes when live HTTP is 200
+  N3. explicit http_status mismatch fails verification
+  N4. closure re-checks live HTTP even if the journal omitted it
+  O. ZWNJ failure key is teznevise_zwnj (not teznevise_zwnjj)
+  O2. Teznevise ZWNJ check runs even when zwnj_rule is omitted
 """
 import pytest
 
-from ada_reliability.engine import AdaEngine, AdaError, IDENTITIES
+from ada_reliability.engine import AdaEngine, AdaError, IDENTITIES, ZWNJ
 from ada_reliability.seed import seed_phase1
 
 HMAC = "phase1-test-hmac-key-must-be-32+"
@@ -28,7 +35,7 @@ def fresh():
     return e
 
 
-def _setup(applied=True, mutation_type="METADATA_UPDATE"):
+def _setup(applied=True, mutation_type="METADATA_UPDATE", postcondition=None):
     """task -> bootstrap -> snapshot -> authorize -> journal -> (apply)."""
     e = fresh()
     task = e.create_task(
@@ -50,12 +57,14 @@ def _setup(applied=True, mutation_type="METADATA_UPDATE"):
         mutation_type=mutation_type, snapshot_hash=snap["snapshot_hash"],
         idempotency_key="idem-pc",
     )
+    if postcondition is None:
+        postcondition = {"http_status": 200, "meta": payload["meta"],
+                         "zwnj_rule": "zero"}
     j = e.journal_intent(
         task_run_id=task["id"], idempotency_key="idem-pc",
         tool_name="wp_update_metadata", site_id="teznevise.ir", resource_id="42",
         payload=payload, snapshot_id=snap["id"],
-        expected_postcondition={"http_status": 200, "meta": payload["meta"],
-                                "zwnj_rule": "zero"},
+        expected_postcondition=postcondition,
     )
     if applied:
         e.apply_authorized_mutation(journal_id=j["id"])
@@ -334,3 +343,117 @@ def test_M_language_journal_cannot_close_without_validator():
     assert "language" not in v["verified_requirements"]
     with pytest.raises(AdaError):
         e.close_task_if_verified(task["id"], j["id"])
+
+
+# -- AAX-2 P1 "HTTP Status Is Skipped" -----------------------------------
+# HTTP success is mandatory. A journal that omits http_status must still
+# fail verification/closure when live returns 404/500.
+
+def test_N_omitted_http_status_rejects_404():
+    e, task, j, payload = _setup(postcondition={"meta": {"yoast_title": "خدمات نگارش"}})
+    live = e.wp.resources[("teznevise.ir", "42")]
+    live.http_status = 404
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"meta": payload["meta"]},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "http_status" in v["failures"]
+    assert v["verified_requirements"]["http_status"] == 200
+    with pytest.raises(AdaError) as ei:
+        e.close_task_if_verified(task["id"], j["id"])
+    assert ei.value.code in (
+        "FRESH_VERIFICATION_REQUIRED",
+        "POSTCONDITION_NOT_PROVEN",
+        "STALE_VERIFICATION",
+    )
+    assert e.tasks[task["id"]]["state"] != "COMPLETED"
+
+
+def test_N2_omitted_http_status_accepts_200_and_closes():
+    e, task, j, payload = _setup(postcondition={"meta": {"yoast_title": "خدمات نگارش"}})
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"meta": payload["meta"]},
+        after_mutation_id=j["id"],
+    )
+    assert v["passed"]
+    assert v["verified_requirements"]["http_status"] == 200
+    closed = e.close_task_if_verified(task["id"], j["id"])
+    assert closed["state"] == "COMPLETED"
+
+
+def test_N3_explicit_http_status_mismatch_fails():
+    e, task, j, payload = _setup()
+    live = e.wp.resources[("teznevise.ir", "42")]
+    live.http_status = 500
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"], "zwnj_rule": "zero"},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "http_status" in v["failures"]
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
+    assert e.tasks[task["id"]]["state"] != "COMPLETED"
+
+
+def test_N4_close_rejects_non_success_http_even_if_journal_omits_it():
+    """Defense in depth: a synthetic passing verification cannot close a 500."""
+    e, task, j, payload = _setup(postcondition={"meta": {"yoast_title": "خدمات نگارش"}})
+    live = e.wp.resources[("teznevise.ir", "42")]
+    live.http_status = 500
+    live.verification_stale = False
+    # Inject a passing verification that did not record HTTP (legacy shape).
+    e.verifications.append({
+        "id": "legacy-v",
+        "site_id": "teznevise.ir",
+        "resource_id": "42",
+        "passed": True,
+        "failures": [],
+        "live_hash": live.snapshot_hash(),
+        "after_mutation_id": j["id"],
+        "at": e.now(),
+        "stale": False,
+        "identity": IDENTITIES["VERIFIER"],
+        "verified_requirements": {"meta": payload["meta"]},
+    })
+    with pytest.raises(AdaError) as ei:
+        e.close_task_if_verified(task["id"], j["id"])
+    assert ei.value.code == "POSTCONDITION_NOT_PROVEN"
+    assert e.tasks[task["id"]]["state"] != "COMPLETED"
+
+
+# -- AAX-2 P1 "ZWNJ Failure Key Changed" ---------------------------------
+
+def test_O_zwnj_failure_key_is_teznevise_zwnj_not_double_j():
+    e, task, j, payload = _setup()
+    live = e.wp.resources[("teznevise.ir", "42")]
+    live.content = f"می{ZWNJ}خواهم"
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"], "zwnj_rule": "zero"},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert any(f.startswith("teznevise_zwnj:") for f in v["failures"])
+    assert not any("teznevise_zwnjj" in f for f in v["failures"])
+    assert all(not f.startswith("teznevise_zwnjj") for f in v["failures"])
+
+
+def test_O2_teznevise_zwnj_checked_even_when_rule_omitted():
+    e, task, j, payload = _setup(postcondition={"meta": {"yoast_title": "خدمات نگارش"}})
+    live = e.wp.resources[("teznevise.ir", "42")]
+    live.content = f"می{ZWNJ}خواهم"
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"meta": payload["meta"]},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert any(f.startswith("teznevise_zwnj:") for f in v["failures"])
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
+    assert e.tasks[task["id"]]["state"] != "COMPLETED"

@@ -528,7 +528,8 @@ def test_teznevise_zero_zwnj_validator():
     v = e.verify_live(site_id="teznevise.ir", resource_id="42",
                       expected={"http_status": 200, "zwnj_rule": "zero"})
     assert v["passed"] is False
-    assert any("teznevise_zwnj" in f for f in v["failures"])
+    assert any(f.startswith("teznevise_zwnj:") for f in v["failures"])
+    assert not any("teznevise_zwnjj" in f for f in v["failures"])
 
 
 def test_shadow_mode_does_not_mutate():
