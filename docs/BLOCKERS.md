@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **local engine + 33 pytest green. Remote branch still missing full engine.py / contract tests (push size). Production import and canary not executed.**
+Status: **local engine restored + 28 pytest green. Production import and canary not executed.**
 
 ## Blocker 1 — no live VPS / SentinelX access
 
@@ -24,12 +24,14 @@ Do not run a live Teznevise mutation without explicit human approval after shado
 
 Mirrored existing 2.0.0. Did not invent a v1.4 document.
 
-## Blocker 4 — GitHub connector payload size
+## Blocker 4 — GitHub connector / payload size (resolved for engine)
 
-Full `engine.py` + `test_phase1_contracts.py` verified locally and zipped. Apply the zip onto `phase1/reliability-layer` from a machine that can `git push`.
+Full `engine.py` + `test_phase1_contracts.py` restored from historical complete
+blobs onto `phase1/reliability-layer`. Placeholders removed. 28 pytest green.
 
 ## Non-blockers (done)
 
 - Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied.
-- Job/schedule/lease regression tests added against documented PRESERVED_BEHAVIOR.
+- Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
 - HMAC receipts carry `signature_alg` + `key_id`.
+- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine.

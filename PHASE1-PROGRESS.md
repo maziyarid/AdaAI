@@ -24,3 +24,28 @@
 
 ### Rule
 Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+## 2026-09-17 — restore full engine + contract tests (no VPS)
+
+**Session:** continue Phase 1 reliability (VPS still unavailable).
+
+### Done this session
+- Restored `ada-reliability/src/ada_reliability/engine.py` from last complete
+  historical blob (`2c5e723` / `4f1fb06`, 1075 lines) after remote had only
+  the `PLACEHOLDER_WILL_BE_REPLACED` stub.
+- Restored `tests/test_phase1_contracts.py` (22 contract cases + helpers).
+- Re-exported `seed_phase1` from `seed.py` so package imports stay coherent
+  with the dict-based engine API used by tests.
+- **28 pytest green** locally: 22 phase1 contracts + 2 adapter + 4 live
+  job/schedule/lease regressions.
+- Confirmed models.py remains valid dataclasses (supplementary shapes).
+- Confirmed MariaDB dialect review and SQL remain document-only / not applied.
+- No VPS import, no production SQL apply, no Teznevise canary.
+
+### Still blocked
+1. No VPS/SentinelX → cannot import `/opt/maziyar-control-core`.
+2. Production SQL not applied (needs backup + restore drill + approval).
+3. Live Teznevise canary not authorized.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.

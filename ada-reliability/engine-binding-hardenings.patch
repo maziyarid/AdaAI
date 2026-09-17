@@ -1,1 +1,8 @@
-See local /tmp/engine.patch - will be filled
+# Historical note
+# The binding-hardening work (authorize/passport/receipt/approval/journal
+# fail-closed bindings) was intended in commits around 4f1fb06/ada127a.
+# Those commits replaced engine.py and tests with placeholders due to
+# GitHub payload size limits. The full engine restored on this branch is
+# the last complete blob from 2c5e723/4f1fb06 (52KB, 1075 lines) with
+# 28 pytest green. Further binding regression tests can be added on top
+# without replacing the engine again.
