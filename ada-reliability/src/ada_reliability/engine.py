@@ -38,6 +38,16 @@ WRITING_TASK_TYPES = {
     "metadata_refresh", "service_page", "medical_copy",
 }
 ZWNJ = "\u200c"
+
+# Authoritative postcondition schema: the only top-level requirement keys the
+# verifier can actually evaluate against live state. Anything else is
+# unverifiable by construction and must fail closed (UNSUPPORTED_POSTCONDITION).
+SUPPORTED_POSTCONDITION_KEYS = {
+    "http_status",
+    "meta",
+    "content",
+    "zwnj_rule",
+}
 INJECTION_NEEDLES = (
     "ignore previous instructions",
     "ignore your previous instructions",
@@ -952,6 +962,14 @@ class AdaEngine:
     def journal_intent(self, *, task_run_id: str, idempotency_key: str, tool_name: str,
                        site_id: str, resource_id: str, payload: dict,
                        snapshot_id: Optional[str], expected_postcondition: dict) -> dict:
+        unsupported = set(expected_postcondition or {}) - SUPPORTED_POSTCONDITION_KEYS
+        if unsupported:
+            # Fail closed at creation: never allow an inherently unverifiable
+            # journal to exist (its postcondition could never be proven).
+            raise AdaError(
+                "UNSUPPORTED_POSTCONDITION",
+                "unsupported keys: " + ", ".join(sorted(unsupported)),
+            )
         ph = sha256_obj(payload)
         grant = None
         for g in self._authz_grants.values():
@@ -1001,19 +1019,37 @@ class AdaEngine:
         if not live:
             return {"passed": False, "reason": "missing_resource", "stale": False}
         failures = []
-        if live.http_status != expected.get("http_status", 200):
-            failures.append("http_status")
+        unsupported = set(expected) - SUPPORTED_POSTCONDITION_KEYS
+        if unsupported:
+            # Fail closed: requirements the verifier cannot evaluate must
+            # never be recorded as proven.
+            failures.append(
+                "UNSUPPORTED_POSTCONDITION:" + ",".join(sorted(unsupported))
+            )
+        zwnj_applied = (
+            site_id in ("teznevise.ir", "teznevise")
+            or expected.get("zwnj_rule") == "zero"
+        )
+        verified_requirements = {}
+        if "http_status" in expected:
+            if live.http_status != expected["http_status"]:
+                failures.append("http_status")
+            verified_requirements["http_status"] = expected["http_status"]
         if "meta" in expected:
             for k, v in expected["meta"].items():
                 if live.meta.get(k) != v:
                     failures.append(f"meta.{k}")
-        if "content" in expected and live.content != expected["content"]:
-            failures.append("content")
-        if site_id in ("teznevise.ir", "teznevise") or expected.get("zwnj_rule") == "zero":
+            verified_requirements["meta"] = copy.deepcopy(expected["meta"])
+        if "content" in expected:
+            if live.content != expected["content"]:
+                failures.append("content")
+            verified_requirements["content"] = expected["content"]
+        if "zwnj_rule" in expected and zwnj_applied:
             blob = live.content + " " + " ".join(str(x) for x in live.meta.values())
             ok, n = self.teznevise_zwnj_ok(blob)
             if not ok:
-                failures.append(f"teznevise_zwnj:{n}")
+                failures.append(f"teznevise_zwnjj:{n}")
+            verified_requirements["zwnj_rule"] = expected["zwnj_rule"]
         vid = self._id()
         rec = {
             "id": vid, "site_id": site_id, "resource_id": resource_id,
@@ -1022,7 +1058,7 @@ class AdaEngine:
             "after_mutation_id": after_mutation_id,
             "at": self.now(), "stale": False,
             "identity": IDENTITIES["VERIFIER"],
-            "verified_requirements": copy.deepcopy(expected),
+            "verified_requirements": verified_requirements,
         }
         self.verifications.append(rec)
         if rec["passed"]:

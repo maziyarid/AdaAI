@@ -75,12 +75,16 @@ def test_A_exact_postcondition_closes():
     assert closed["verification"]["id"] == v["id"]
 
 
-# B. strict superset verification closes
+# B. strict superset verification closes.
+# NOTE: since the SUPPORTED_POSTCONDITION_KEYS schema landed, a strict
+# superset must be expressed with supported keys only; arbitrary unsupported
+# keys (e.g. "extra_probe") now fail closed in verify_live (see test_I).
 def test_B_superset_verification_closes():
     e, task, j, payload = _setup()
+    live = e.wp.read("teznevise.ir", "42")
     v = e.verify_live(site_id="teznevise.ir", resource_id="42",
                       expected={"http_status": 200, "meta": payload["meta"],
-                                "zwnj_rule": "zero", "extra_probe": "recorded"},
+                                "zwnj_rule": "zero", "content": live.content},
                       after_mutation_id=j["id"])
     assert v["passed"]
     closed = e.close_task_if_verified(task["id"], j["id"])
@@ -222,3 +226,219 @@ def test_H_approved_publish_end_to_end_with_close():
     assert verified["passed"]
     closed = e.close_task_if_verified(task["id"], j["id"])
     assert closed["state"] == "COMPLETED"
+
+
+# -- AAX-2 P1 "Unsupported Requirements Verify" ---------------------------
+# Unsupported top-level requirement keys must fail closed and must never be
+# copied into verified_requirements as unexamined proof.
+
+def _setup_unverified(mutation_type="METADATA_UPDATE"):
+    """task -> bootstrap -> snapshot -> authorize (no journal/apply yet)."""
+    e = fresh()
+    task = e.create_task(
+        idempotency_key="t-uns", task_type="academic_content",
+        agent_id="mistral-canary", requested_action="wp_update_metadata",
+        site_id="teznevise.ir", project_id="teznevise",
+    )
+    pack = e.bootstrap(
+        agent_id="mistral-canary", task_run_id=task["id"],
+        project_id="teznevise", site_id="teznevise.ir",
+        task_type="academic_content",
+    )
+    snap = e.snapshot("teznevise.ir", "42", "worker")
+    payload = {"resource_id": "42", "meta": {"yoast_title": "خدمات نگارش"}}
+    e.authorize(
+        action="wp_update_metadata", payload=payload, passport=pack["passport"],
+        context_receipt=pack["receipt_id"], agent_id="mistral-canary",
+        task_type="academic_content", site_id="teznevise.ir",
+        mutation_type=mutation_type, snapshot_hash=snap["snapshot_hash"],
+        idempotency_key="idem-uns",
+    )
+    return e, task, snap, payload
+
+
+# I. verify_live fails closed on an unsupported top-level requirement
+def test_I_verify_live_rejects_unsupported_requirement():
+    e, task, j, payload = _setup()
+    v = e.verify_live(site_id="teznevise.ir", resource_id="42",
+                      expected={"http_status": 200, "canonical": False},
+                      after_mutation_id=j["id"])
+    assert not v["passed"]
+    assert any(f.startswith("UNSUPPORTED_POSTCONDITION") for f in v["failures"])
+
+
+# J. unsupported requirements are not copied into verified_requirements
+def test_J_unsupported_requirements_not_copied_into_proof():
+    e, task, j, payload = _setup()
+    v = e.verify_live(site_id="teznevise.ir", resource_id="42",
+                      expected={"http_status": 200, "canonical": False,
+                                "language": "xx"},
+                      after_mutation_id=j["id"])
+    assert v["verified_requirements"] == {"http_status": 200}
+
+
+# K. journal creation rejects an unsupported postcondition key (canonical)
+def test_K_journal_intent_rejects_unsupported_postcondition():
+    e, task, snap, payload = _setup_unverified()
+    with pytest.raises(AdaError) as ei:
+        e.journal_intent(
+            task_run_id=task["id"], idempotency_key="idem-uns",
+            tool_name="wp_update_metadata", site_id="teznevise.ir",
+            resource_id="42", payload=payload, snapshot_id=snap["id"],
+            expected_postcondition={"http_status": 200, "canonical": False},
+        )
+    assert ei.value.code == "UNSUPPORTED_POSTCONDITION"
+
+
+# K2. journal creation rejects an unsupported postcondition key (language)
+def test_K2_journal_intent_rejects_language_postcondition():
+    e, task, snap, payload = _setup_unverified()
+    with pytest.raises(AdaError) as ei:
+        e.journal_intent(
+            task_run_id=task["id"], idempotency_key="idem-uns",
+            tool_name="wp_update_metadata", site_id="teznevise.ir",
+            resource_id="42", payload=payload, snapshot_id=snap["id"],
+            expected_postcondition={"http_status": 200, "language": "xx"},
+        )
+    assert ei.value.code == "UNSUPPORTED_POSTCONDITION"
+
+
+# L. a legacy journal requiring `canonical` cannot be closed by supplying the
+#    same value to verify_live (the verifier refuses to treat it as proof)
+def test_L_canonical_journal_cannot_close_via_matching_caller_value():
+    e, task, j, payload = _setup()
+    j["expected_postcondition"]["canonical"] = False  # legacy unverifiable journal
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"],
+                  "zwnj_rule": "zero", "canonical": False},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "canonical" not in v["verified_requirements"]
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
+
+
+# M. a legacy journal requiring `language` cannot close without a live validator
+def test_M_language_journal_cannot_close_without_validator():
+    e, task, j, payload = _setup()
+    j["expected_postcondition"]["language"] = "xx"
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"],
+                  "zwnj_rule": "zero", "language": "xx"},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "language" not in v["verified_requirements"]
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
+
+
+# -- AAX-2 P1 "Unsupported Requirements Verify" ---------------------------
+# Unsupported top-level requirement keys must fail closed and must never be
+# copied into verified_requirements as unexamined proof.
+
+def _setup_unverified(mutation_type="METADATA_UPDATE"):
+    """task -> bootstrap -> snapshot -> authorize (no journal/apply yet)."""
+    e = fresh()
+    task = e.create_task(
+        idempotency_key="t-uns", task_type="academic_content",
+        agent_id="mistral-canary", requested_action="wp_update_metadata",
+        site_id="teznevise.ir", project_id="teznevise",
+    )
+    pack = e.bootstrap(
+        agent_id="mistral-canary", task_run_id=task["id"],
+        project_id="teznevise", site_id="teznevise.ir",
+        task_type="academic_content",
+    )
+    snap = e.snapshot("teznevise.ir", "42", "worker")
+    payload = {"resource_id": "42", "meta": {"yoast_title": "خدمات نگارش"}}
+    e.authorize(
+        action="wp_update_metadata", payload=payload, passport=pack["passport"],
+        context_receipt=pack["receipt_id"], agent_id="mistral-canary",
+        task_type="academic_content", site_id="teznevise.ir",
+        mutation_type=mutation_type, snapshot_hash=snap["snapshot_hash"],
+        idempotency_key="idem-uns",
+    )
+    return e, task, snap, payload
+
+
+# I. verify_live fails closed on an unsupported top-level requirement
+def test_I_verify_live_rejects_unsupported_requirement():
+    e, task, j, payload = _setup()
+    v = e.verify_live(site_id="teznevise.ir", resource_id="42",
+                      expected={"http_status": 200, "canonical": False},
+                      after_mutation_id=j["id"])
+    assert not v["passed"]
+    assert any(f.startswith("UNSUPPORTED_POSTCONDITION") for f in v["failures"])
+
+
+# J. unsupported requirements are not copied into verified_requirements
+def test_J_unsupported_requirements_not_copied_into_proof():
+    e, task, j, payload = _setup()
+    v = e.verify_live(site_id="teznevise.ir", resource_id="42",
+                      expected={"http_status": 200, "canonical": False,
+                                "language": "xx"},
+                      after_mutation_id=j["id"])
+    assert v["verified_requirements"] == {"http_status": 200}
+
+
+# K. journal creation rejects an unsupported postcondition key (canonical)
+def test_K_journal_intent_rejects_unsupported_postcondition():
+    e, task, snap, payload = _setup_unverified()
+    with pytest.raises(AdaError) as ei:
+        e.journal_intent(
+            task_run_id=task["id"], idempotency_key="idem-uns",
+            tool_name="wp_update_metadata", site_id="teznevise.ir",
+            resource_id="42", payload=payload, snapshot_id=snap["id"],
+            expected_postcondition={"http_status": 200, "canonical": False},
+        )
+    assert ei.value.code == "UNSUPPORTED_POSTCONDITION"
+
+
+# K2. journal creation rejects an unsupported postcondition key (language)
+def test_K2_journal_intent_rejects_language_postcondition():
+    e, task, snap, payload = _setup_unverified()
+    with pytest.raises(AdaError) as ei:
+        e.journal_intent(
+            task_run_id=task["id"], idempotency_key="idem-uns",
+            tool_name="wp_update_metadata", site_id="teznevise.ir",
+            resource_id="42", payload=payload, snapshot_id=snap["id"],
+            expected_postcondition={"http_status": 200, "language": "xx"},
+        )
+    assert ei.value.code == "UNSUPPORTED_POSTCONDITION"
+
+
+# L. a legacy journal requiring `canonical` cannot be closed by supplying the
+#    same value to verify_live (the verifier refuses to treat it as proof)
+def test_L_canonical_journal_cannot_close_via_matching_caller_value():
+    e, task, j, payload = _setup()
+    j["expected_postcondition"]["canonical"] = False  # legacy unverifiable journal
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"],
+                  "zwnj_rule": "zero", "canonical": False},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "canonical" not in v["verified_requirements"]
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
+
+
+# M. a legacy journal requiring `language` cannot close without a live validator
+def test_M_language_journal_cannot_close_without_validator():
+    e, task, j, payload = _setup()
+    j["expected_postcondition"]["language"] = "xx"
+    v = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"],
+                  "zwnj_rule": "zero", "language": "xx"},
+        after_mutation_id=j["id"],
+    )
+    assert not v["passed"]
+    assert "language" not in v["verified_requirements"]
+    with pytest.raises(AdaError):
+        e.close_task_if_verified(task["id"], j["id"])
