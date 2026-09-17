@@ -24,14 +24,20 @@ Do not run a live Teznevise mutation without explicit human approval after shado
 
 Mirrored existing 2.0.0. Did not invent a v1.4 document.
 
-## Blocker 4 — GitHub connector / payload size (resolved for engine)
+## Blocker 4 — GitHub connector / payload size (partially resolved)
 
-Full `engine.py` + `test_phase1_contracts.py` restored from historical complete
-blobs onto `phase1/reliability-layer`. Placeholders removed. 28 pytest green.
+Full `engine.py` + `test_phase1_contracts.py` restored **locally** from historical complete blobs. Placeholders still on remote tip for those two files until chunks are reassembled or a credentialed `git push` lands the local commit.
+
+**Workaround on branch:** `ada-reliability/restored-blobs/` holds base64 chunks + `reassemble.py`:
+```bash
+python3 ada-reliability/restored-blobs/reassemble.py
+python3 -m pytest ada-reliability/tests -q
+```
 
 ## Non-blockers (done)
 
 - Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied.
 - Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
 - HMAC receipts carry `signature_alg` + `key_id`.
-- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine.
+- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine (local).
+- 28 pytest green locally.
