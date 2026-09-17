@@ -1,7 +1,9 @@
 {
   "skill": "art-of-writing-bible",
   "version": "1.3.0",
-  "notes": "Negative tests: a Mayo-style / AI-opener input must not survive; a Wittgenstein cafe explainer must not be cloned onto an SPSS page; detector-evasion must be refused; academic overlay must not be flattened into cafe Persian; alpha must not be reported as validity.",
+  "bible_version": "2.0.0",
+  "release_pointer": "skills/qalam/RELEASE.json",
+  "notes": "Eval pack 1.3.0 validates Art of Writing Bible 2.0.0. Versions are independent; do not treat the pack version as the Bible version. Negative tests: a Mayo-style / AI-opener input must not survive; a Wittgenstein cafe explainer must not be cloned onto an SPSS page; detector-evasion must be refused; academic overlay must not be flattened into cafe Persian; alpha must not be reported as validity.",
   "cases": [
     {
       "id": "no-temporal-fluff",

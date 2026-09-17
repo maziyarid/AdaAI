@@ -7,8 +7,11 @@
     "Engram"
   ],
   "current": {
+    "release_pointer": "skills/qalam/RELEASE.json",
     "qalam_router": "1.1.0",
     "art_of_writing_bible": "2.0.0",
+    "eval_pack": "1.3.0",
+    "eval_pack_validates": "art-of-writing-bible@2.0.0",
     "pointer": "current"
   },
   "provenance": [

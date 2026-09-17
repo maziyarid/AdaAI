@@ -4,13 +4,15 @@ This directory contains the reusable writing layer for Maziyar's agents.
 
 ## Canonical entrypoint
 
-Use `writing/qalam/SKILL.md` as the single entrypoint for substantial writing, editorial, UX-copy and content work.
+Use `skills/qalam/router/SKILL.md` as the single entrypoint for substantial writing, editorial, UX-copy and content work.
+
+**Authoritative current versions** live in `skills/qalam/RELEASE.json` (router, Bible, eval pack, overlay paths). Do not hard-code a "current" Qalam or Bible version in workers.
 
 Qalam must:
 
-1. recover relevant project/site policy from memory;
-2. load the latest Art of Writing Bible;
-3. select only the required register/domain overlay;
+1. recover relevant project/site policy from Ada Context Core memory;
+2. load the Art of Writing Bible version named in `RELEASE.json`;
+3. load every overlay listed for the selected task profile (not unrelated profiles);
 4. research only when the task needs current or external evidence;
 5. keep factual QA separate from language/UX QA;
 6. persist meaningful completed decisions back to durable memory.
@@ -19,30 +21,29 @@ The user should not need to manually select a long list of tools.
 
 ## Canonical writing standard
 
-Current canonical standard: **Art of Writing Bible v1.4.0 (2026-09-15)**.
+Current versions are **not** a single number:
 
-v1.4 adds:
+- Qalam router: see `RELEASE.json` → `components.qalam-router.version` (currently 1.1.0)
+- Art of Writing Bible: see `RELEASE.json` → `components.art-of-writing-bible.version` (currently 2.0.0)
+- Eval pack: see `RELEASE.json` → `components.art-of-writing-bible-evals.version` (currently 1.3.0, validating Bible 2.0.0)
+
+The historical `1.4.0` label in older integration notes is **not current**. It is recorded in `RELEASE.json` `legacy_labels`.
+
+Bible 2.0.0 adds:
 
 - Iranian Persian (`fa-IR`) UX-writing and landing-page rules;
 - interface/form/error/success/empty/loading microcopy;
 - Iranian product-vocabulary consistency;
-- protection against unintended Dari/`fa-AF` localisation leakage on Iran-targeted interfaces;
-- Qalam's single-agent tool-routing contract.
-
-Preserved from v1.3:
-
-- PhilosophyCafe corpus findings are used as public-corpus evidence, not as a living-person imitation target;
-- academic, methodology/statistics and service-page overlays;
-- Teznevise's no-U+200C rule remains site-specific;
-- detector-evasion tricks and fabricated quirks remain forbidden.
+- protection against unintended Dari/`fa-AF` localisation leakage on Iran-targeted interfaces.
 
 ## Repository files
 
-- `qalam/SKILL.md` — orchestration/router layer.
-- `art-of-writing-bible/references/ux-writing-fa-ir.md` — product/UI/landing Persian overlay.
-- `art-of-writing-bible/references/tool-routing.md` — role-based tool routing.
+Paths below are the in-repo locations. They match `RELEASE.json` / `REGISTRY.json`.
 
-The full v1.4 Bible, version archive, corpus references and evaluation pack remain in the canonical Google Drive bundle and should be mirrored here only when the runtime needs a fully self-contained repository copy.
+- `skills/qalam/router/SKILL.md` — orchestration/router layer.
+- `skills/qalam/fa-ir-overlays/ux-writing-fa-ir.md` — product/UI/landing Persian overlay.
+- `skills/qalam/fa-ir-overlays/tool-routing.md` — role-based tool routing.
+- `skills/qalam/fa-ir-overlays/fa-ir-product-lexicon.md` — Iranian product lexicon.
 
 ## Runtime integration contract
 

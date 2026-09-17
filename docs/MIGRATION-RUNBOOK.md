@@ -8,7 +8,7 @@ This is additive. It must not destroy existing control-core tables.
 2. Off-host copy confirmed.
 3. Restore drill into a throwaway schema succeeded (see ROLLBACK-RUNBOOK.md).
 4. `maziyar-control-core.service` is healthy on 127.0.0.1:8770.
-5. Diff of SQL reviewed: only `CREATE TABLE IF NOT EXISTS ada_*`.
+5. Diff of SQL reviewed: additive `CREATE TABLE IF NOT EXISTS ada_*` plus the single bootstrap `INSERT IGNORE` of `('global','*',1)` in `001_ada_memory.sql`. No `DROP`/`ALTER` of existing control-core tables. Stop if the diff contains anything else.
 6. Production cutover approval recorded (human, not the proposing model).
 
 ## Apply (after approval)
@@ -39,5 +39,5 @@ Existing `jobs` / `schedules` / lease tables must still be readable.
 ## What this session did not do
 
 - Did not connect to production MariaDB.
-- Did not import `/opt/maziyar-control-core` (VPS access unavailable).
+- Did not import `/opt/maziyar-control-core` from this session (no SSH here).
 - Did not run a live canary.

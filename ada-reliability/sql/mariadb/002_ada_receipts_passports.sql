@@ -5,7 +5,11 @@ CREATE TABLE IF NOT EXISTS ada_policy_releases (
   status VARCHAR(32) NOT NULL,
   created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   activated_at TIMESTAMP(6) NULL,
-  PRIMARY KEY (component, release)
+  -- UNIQUE treats NULL as distinct; SUPERSEDED/retired rows keep NULL here.
+  -- At most one ACTIVE release per component.
+  active_component VARCHAR(64) AS (IF(status = 'ACTIVE', component, NULL)) VIRTUAL,
+  PRIMARY KEY (component, release),
+  UNIQUE KEY uq_ada_policy_one_active (active_component)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ada_agent_passports (

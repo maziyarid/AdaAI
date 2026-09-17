@@ -2,9 +2,21 @@
 
 Ada Context Core's pure contract tests currently pass locally: **7/7**, and `python -m compileall app mcp` succeeds.
 
-GitHub-hosted Actions is intentionally not enabled in this repository right now. Three attempts, including a one-line `echo` runner probe, failed before any workflow step began. That pattern points to a GitHub Actions repository/account runner or policy availability issue rather than an Ada test failure.
+Phase-1 `ada-reliability` now has `.github/workflows/ada-reliability.yml`. Hosted Actions previously failed to start in this repository (`docs/CI.md` history below). If the new workflow is skipped by GitHub policy, the equivalent proof is a clean venv:
 
-The permanently failing workflow was removed from `main` so the repository does not present a false red build signal.
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install pytest
+pip install -e ada-reliability
+python -c "from ada_reliability import AdaEngine, seed_phase1"
+cd ada-reliability && pytest -q
+```
+
+GitHub-hosted Actions was previously not enabled in this repository. Three attempts, including a one-line `echo` runner probe, failed before any workflow step began. That pattern points to a GitHub Actions repository/account runner or policy availability issue rather than an Ada test failure.
+
+The permanently failing workflow was removed from `main` so the repository does not present a false red build signal. The `ada-reliability` workflow is a new, narrower probe; treat a missing run as "Actions unavailable", not as "tests failed".
+
 
 ## Local / VPS validation
 

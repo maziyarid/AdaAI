@@ -20,6 +20,8 @@ Reviewed files:
 - `INSERT IGNORE` seed of `ada_scope_versions`
 - `AUTO_INCREMENT` on event tables
 - Prefix `ada_` — does not collide with documented control-core job/schedule/lease tables
+- `ada_policy_releases.active_component` VIRTUAL generated column + UNIQUE (MariaDB 10.2+; multiple NULLs allowed, so only one ACTIVE row per component)
+- `ada_qalam_assets.path_hash CHAR(64)` primary-key component (full-path SHA-256) instead of unique `path(191)` prefix
 
 ## Intentional absences (do not add)
 
@@ -32,6 +34,8 @@ Reviewed files:
 1. Live table names for jobs/schedules/leases are **not** captured from the host. Confirm no existing `ada_*` tables before apply.
 2. JSON columns are fine on 10.11; avoid PostgreSQL-only operators in later queries.
 3. Apply only after backup + restore drill + human approval (`docs/MIGRATION-RUNBOOK.md`).
+4. `path_hash` must be SHA2(path, 256) of the full 512-char path; a prefix unique index is not collision-safe.
+5. One-ACTIVE uniqueness relies on the generated `active_component` column. Application code must still SUPERSEDE the previous ACTIVE row before inserting a new ACTIVE row.
 
 ## Safest next host step
 

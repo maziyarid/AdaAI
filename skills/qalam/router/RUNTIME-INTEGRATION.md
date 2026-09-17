@@ -10,17 +10,19 @@ Qalam is the single writing entrypoint. Runtime workers should not each carry th
 
 ## Bootstrap contract
 
-At worker start, resolve the current writing configuration from the Content Factory control plane:
+At worker start, resolve the current writing configuration from `skills/qalam/RELEASE.json` (not from a hard-coded version string):
 
 - `WRITING_AGENT_ENTRYPOINT=QALAM`
-- `QALAM_CANONICAL_VERSION=1.4.0`
-- `QALAM_GITHUB_ENTRY=https://github.com/maziyarid/agents/blob/main/writing/qalam/SKILL.md`
-- `QALAM_MEMORY_PRIMARY=XMemo`
-- `QALAM_MEMORY_SECONDARY=Engram`
+- `QALAM_RELEASE_POINTER=skills/qalam/RELEASE.json`
+- Router version = `components.qalam-router.version`
+- Bible version = `components.art-of-writing-bible.version`
+- Eval pack version = `components.art-of-writing-bible-evals.version` (independent of the Bible)
+- `QALAM_GITHUB_ENTRY=skills/qalam/router/SKILL.md`
+- `QALAM_MEMORY_PRIMARY=Ada Context Core` (XMemo/Engram are optional mirrors)
 - `QALAM_TOOL_ROUTING=ROLE_BASED_MINIMAL`
 - `PERSIAN_PRODUCT_LOCALE=fa-IR`
 
-If a later canonical version is explicitly configured, use it instead of hard-coding 1.4.0.
+Do not set `QALAM_CANONICAL_VERSION=1.4.0`. That label is historical; see `RELEASE.json` `legacy_labels`.
 
 ## Required execution sequence
 
@@ -29,7 +31,7 @@ For every substantial writing/editing task:
 1. **Load task + site policy** — task packet, Site Profiles, canonical/search-intent owner, language, page role and risk.
 2. **Enter Qalam** — load Qalam router and the configured Art of Writing Bible version.
 3. **Recover relevant memory** — XMemo first for current decisions/state; Engram only when historical wording/provenance materially matters.
-4. **Load only the needed overlay** — academic, research guide, service, `UX_WRITING_FA_IR`, medical or English.
+4. **Load the selected profile completely** — router + Bible (always, for writing tasks) + every overlay listed for that profile. "Only the needed overlay" means do not load *unrelated profiles*. It does not authorize skipping Bible companions or listed profile overlays. Profiles: academic, research guide, service, `UX_WRITING_FA_IR`, medical, English. Overlay paths are in `RELEASE.json`.
 5. **Load evidence packet** — Content Factory/Research Library/You.com-backed findings and other current evidence only when the task requires it.
 6. **Draft or edit** — prefer surgical changes for existing canonical pages unless a full rewrite is explicitly justified.
 7. **Language/register/UX QA** — naturalness, register, `fa-IR` product language, interface clarity, site-specific orthography.
@@ -118,7 +120,7 @@ A worker may pass a compact task envelope such as:
 
 ```yaml
 writing_agent: QALAM
-writing_version: 1.4.0
+writing_version: <from skills/qalam/RELEASE.json>
 site: teznevise.ir
 page_role: SERVICE|GUIDE|BLOG|HUB|TOOL|DOWNLOAD|CASE_STUDY
 locale: fa-IR|en-GB

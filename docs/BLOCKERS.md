@@ -1,14 +1,14 @@
 # Phase-1 blocker report
 
-Status: **local engine restored + 28 pytest green. Production import and canary not executed.**
+Status: **engine + contract tests restored on the branch and 43 pytest green in a clean venv. Production import and canary not executed.**
 
-## Blocker 1 — no live VPS / SentinelX access
+## Blocker 1 — no SSH/SentinelX from this Grok session
 
-**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture, production shadow wrap.
+**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture, production shadow wrap (AAX-3).
 
-**Evidence:** this session has GitHub, not SSH/VPS MCP.
+**Evidence:** this session has GitHub and Agiflow connectors, not SSH. A PR comment claims VPS access exists for some agents; that is not the same as this session having a live shell on the host. Do not treat the old "no VPS anywhere" sentence as current, and do not treat this session as having imported the control core.
 
-**Safest next step:** from an authorized VPS session:
+**Safest next step:** from an authorized VPS session (AAX-3):
 
 1. `tar` `/opt/maziyar-control-core` excluding `.env` / secrets.
 2. `mysqldump --no-data` the control-core schema.
@@ -18,26 +18,25 @@ Status: **local engine restored + 28 pytest green. Production import and canary 
 
 ## Blocker 2 — production canary not authorized
 
-Do not run a live Teznevise mutation without explicit human approval after shadow evidence.
+Do not run a live Teznevise mutation without explicit human approval after shadow evidence (AAX-8).
 
-## Blocker 3 — Bible v1.4 filename vs current 2.0.0
+## Blocker 3 — Bible / router versions are independent
 
-Mirrored existing 2.0.0. Did not invent a v1.4 document.
+Do not collapse router 1.1.0, Bible 2.0.0, eval pack 1.3.0, or the historical 1.4.0 docs label into one number. `skills/qalam/RELEASE.json` is the pointer.
 
-## Blocker 4 — GitHub connector / payload size (partially resolved)
+## Blocker 4 — GitHub Contents API / payload size (resolved this session)
 
-Full `engine.py` + `test_phase1_contracts.py` restored **locally** from historical complete blobs. Placeholders still on remote tip for those two files until chunks are reassembled or a credentialed `git push` lands the local commit.
+Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushed with git, not the Contents API. Placeholders must not return.
 
-**Workaround on branch:** `ada-reliability/restored-blobs/` holds base64 chunks + `reassemble.py`:
-```bash
-python3 ada-reliability/restored-blobs/reassemble.py
-python3 -m pytest ada-reliability/tests -q
-```
+## Blocker 5 — GitHub Actions may still not start
+
+`docs/CI.md` records that hosted runners previously failed before any step. `.github/workflows/ada-reliability.yml` is added anyway. Equivalent proof this session: clean venv `pip install -e ada-reliability` + `43 passed`.
 
 ## Non-blockers (done)
 
 - Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied.
+- `path_hash` uniqueness and one-ACTIVE release constraint in SQL.
 - Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
 - HMAC receipts carry `signature_alg` + `key_id`.
-- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine (local).
-- 28 pytest green locally.
+- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine.
+- 43 pytest green from installed package + working tree.

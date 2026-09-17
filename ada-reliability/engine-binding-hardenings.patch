@@ -1,8 +1,9 @@
-# Historical note
-# The binding-hardening work (authorize/passport/receipt/approval/journal
-# fail-closed bindings) was intended in commits around 4f1fb06/ada127a.
-# Those commits replaced engine.py and tests with placeholders due to
-# GitHub payload size limits. The full engine restored on this branch is
-# the last complete blob from 2c5e723/4f1fb06 (52KB, 1075 lines) with
-# 28 pytest green. Further binding regression tests can be added on top
-# without replacing the engine again.
+# Binding hardenings (AAX-1 / AAX-2)
+# Recovered engine.py from 2c5e723, then applied fail-closed bindings in-tree:
+# - authorize uses stored passport (agent + version), empty allowed_sites deny
+# - receipt agent/task/site/payload/passport/mutation class binding
+# - approval tickets stay inside receipt scope
+# - consume_approval requires snapshot_hash when the ticket bound one
+# - journal_intent / apply_authorized_mutation require matching ALLOW + receipt
+# - policy receipts hash the ACTIVE asset bundle (real files), not a placeholder
+# Do not replace the engine with placeholders again.

@@ -1,6 +1,35 @@
 # Phase 1 reliability progress log
 
+## 2026-09-17 — AAX-1 restore + AAX-2 fail-closed bindings (Grok)
+
+**Session:** Grok with GitHub + Agiflow. PR head before this commit: `66c850df9eacbd9c55e496d1d7bbd5fb104c52c2`.
+
+### Evidence (do not treat older "33 pytest green locally" claims as completion)
+- Remote `engine.py` and `test_phase1_contracts.py` were still placeholders at that SHA.
+- Recovered the complete engine/tests from git history `2c5e723` (1075-line engine, 588-line contracts). Later "restore" commits did not actually land the blobs (GitHub Contents API size).
+- Restored via `git checkout 2c5e723 -- …` then applied fail-closed hardenings. Push is a real git commit, not the Contents API.
+
+### Done this session
+- Restored `ada-reliability/src/ada_reliability/engine.py` and `tests/test_phase1_contracts.py`.
+- Added `mutations.py` and `qalam_release.py`.
+- Fail-closed: passport bound to agent + stored version; empty `allowed_sites` denies; receipt agent/task/site/payload/passport/mutation binding; approval stays inside receipt scope; snapshot required when ticket bound one; journal/apply require matching ALLOW + live receipt; policy receipts hash the ACTIVE asset bundle (real files when present), not a placeholder string.
+- Authoritative Qalam pointer: `skills/qalam/RELEASE.json`. Router 1.1.0 and Bible 2.0.0 stay independent; eval pack 1.3.0 validates Bible 2.0.0.
+- Overlay paths reconciled to `skills/qalam/fa-ir-overlays/*`. Loading plan is deterministic (router + Bible + every listed profile overlay + Bible companions).
+- MariaDB: `path_hash` PK (no `path(191)` unique); one-ACTIVE unique generated column.
+- Migration runbook precondition 5 now admits the bootstrap `INSERT IGNORE`.
+- GitHub Actions workflow `.github/workflows/ada-reliability.yml` (may still be blocked by repo Actions policy; this session also ran a clean venv `pip install -e` + pytest).
+- **43 pytest passed** from the working tree, including an isolated venv install/import.
+
+### Production
+- SQL not applied.
+- No live Teznevise canary.
+- This session has GitHub + Agiflow, not SSH to `/opt/maziyar-control-core`. AAX-3 remains blocked here even if another agent has VPS.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
 ## 2026-09-17 — continue: split engine, dialect review, job contracts
+
 
 **Session:** continue AdaAI Phase 1 reliability work (no VPS).
 
