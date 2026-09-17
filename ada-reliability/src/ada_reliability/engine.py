@@ -1022,6 +1022,7 @@ class AdaEngine:
             "after_mutation_id": after_mutation_id,
             "at": self.now(), "stale": False,
             "identity": IDENTITIES["VERIFIER"],
+            "verified_requirements": copy.deepcopy(expected),
         }
         self.verifications.append(rec)
         if rec["passed"]:
@@ -1101,6 +1102,31 @@ class AdaEngine:
             if v["site_id"] == site_id and v["resource_id"] == resource_id:
                 v["stale"] = True
 
+    @staticmethod
+    def _postcondition_covered(verified: Optional[dict], postcondition: dict) -> bool:
+        """True iff `verified` proves at least every requirement in `postcondition`.
+
+        Recursive subset check: every key of the journal's expected postcondition
+        must be present and equal in the verification's recorded requirements.
+        Extra verification requirements are allowed; a weaker/subset
+        verification is NOT sufficient. Nested dictionaries (e.g. `meta`) are
+        checked recursively.
+        """
+        if not isinstance(verified, dict):
+            return False
+        for k, req in postcondition.items():
+            if k not in verified:
+                return False
+            got = verified[k]
+            if isinstance(req, dict) or isinstance(got, dict):
+                if not isinstance(req, dict) or not isinstance(got, dict):
+                    return False
+                if not AdaEngine._postcondition_covered(got, req):
+                    return False
+            elif got != req:
+                return False
+        return True
+
     def close_task_if_verified(self, task_id: str, journal_id: str) -> dict:
         j = self.journal[journal_id]
         if j["status"] != "APPLIED":
@@ -1113,9 +1139,25 @@ class AdaEngine:
                  and not v["stale"] and v["passed"] and v.get("after_mutation_id") == journal_id]
         if not fresh:
             raise AdaError("FRESH_VERIFICATION_REQUIRED", "re-verify after mutation")
+        postcondition = j.get("expected_postcondition") or {}
+        qualifying = None
+        for v in reversed(fresh):
+            if self._postcondition_covered(v.get("verified_requirements"), postcondition):
+                qualifying = v
+                break
+        if qualifying is None:
+            raise AdaError(
+                "POSTCONDITION_NOT_PROVEN",
+                "no fresh passing verification covers the journal expected_postcondition",
+            )
+        # Fail-closed: the resource must be unchanged since the qualifying
+        # verification ran; otherwise the proof no longer describes live state.
+        live_now = self.wp.read(j["site_id"], j["resource_id"])
+        if not live_now or live_now.snapshot_hash() != qualifying["live_hash"]:
+            raise AdaError("STALE_VERIFICATION", "resource changed after qualifying verification")
         j["status"] = "VERIFIED"
         self.tasks[task_id]["state"] = "COMPLETED"
-        return {"state": "COMPLETED", "verification": fresh[-1]}
+        return {"state": "COMPLETED", "verification": qualifying}
 
     # -- shadow mode --------------------------------------------------------
 
