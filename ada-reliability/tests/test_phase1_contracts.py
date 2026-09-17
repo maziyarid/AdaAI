@@ -256,6 +256,7 @@ def test_proposer_cannot_self_approve():
         payload={"resource_id": "42"}, snapshot_hash="snap",
         context_receipt_id=pack["receipt_id"],
         requested_by="mistral-canary", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="k-appr", mutation_type="PUBLISH",
     )
     with pytest.raises(AdaError) as ei:
         e.decide_approval(ticket["id"], approver="mistral-canary",
@@ -290,6 +291,7 @@ def test_approval_replay_fails():
         site_id="teznevise.ir", resource_id="42", payload=payload,
         snapshot_hash="snap", context_receipt_id=pack["receipt_id"],
         requested_by="mistral-canary", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="k-replay", mutation_type="PUBLISH",
     )
     granted = e.decide_approval(ticket["id"], approver="maziyar",
                                 decision="GRANT", identity=IDENTITIES["HUMAN_APPROVER"])
@@ -671,6 +673,7 @@ def test_approval_cannot_escape_receipt_site():
             payload={"resource_id": "99"}, snapshot_hash="snap",
             context_receipt_id=pack["receipt_id"],
             requested_by="mistral-canary", identity=IDENTITIES["MODEL_PROPOSER"],
+            idempotency_key="k-scope", mutation_type="PUBLISH",
         )
     assert ei.value.code == "RECEIPT_SCOPE"
 
@@ -693,6 +696,7 @@ def test_consume_approval_requires_snapshot_when_bound():
         site_id="teznevise.ir", resource_id="42", payload=payload,
         snapshot_hash="snap", context_receipt_id=pack["receipt_id"],
         requested_by="mistral-canary", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="k-snap", mutation_type="PUBLISH",
     )
     granted = e.decide_approval(ticket["id"], approver="maziyar",
                                 decision="GRANT", identity=IDENTITIES["HUMAN_APPROVER"])
@@ -885,4 +889,190 @@ def test_grant_replay_and_stale_snapshot_fail_closed():
     assert j["status"] == "FAILED"
     live = e.wp.read("teznevise.ir", "42")
     assert live.meta.get("yoast_title") == "concurrent-edit"
+
+
+def _publisher():
+    e = fresh()
+    e.register_passport(
+        agent_id="mistral-publisher", task_type="academic_content",
+        allowed_sites=["teznevise.ir"],
+        allowed_tools=["wp_read", "wp_update_metadata", "wp_publish", "wp_delete"],
+        allowed_mutation_types=["METADATA_UPDATE", "PUBLISH", "DELETE"],
+        approval_mandatory=False,
+        approval_classes=["DELETE", "BULK_WRITE", "EXTERNAL_MESSAGE", "POLICY_CHANGE"],
+    )
+    task = e.create_task(
+        idempotency_key="t-pub", task_type="academic_content",
+        agent_id="mistral-publisher", requested_action="wp_publish",
+        site_id="teznevise.ir", project_id="teznevise",
+    )
+    pack = e.bootstrap(
+        agent_id="mistral-publisher", task_run_id=task["id"],
+        project_id="teznevise", site_id="teznevise.ir",
+        task_type="academic_content",
+    )
+    snap = e.snapshot("teznevise.ir", "42", "worker")
+    payload = {"resource_id": "42", "meta": {"yoast_title": "خدمات نگارش پایاننامه"}}
+    return e, task, pack, snap, payload
+
+
+def test_approved_publish_can_execute():
+    """A: ESCALATE → human GRANT+consume → re-authorize exact context → journal/apply."""
+    e, task, pack, snap, payload = _publisher()
+    auth_kw = dict(
+        action="wp_publish", payload=payload, passport=pack["passport"],
+        context_receipt=pack["receipt_id"], agent_id="mistral-publisher",
+        task_type="academic_content", site_id="teznevise.ir",
+        mutation_type="PUBLISH", snapshot_hash=snap["snapshot_hash"],
+        idempotency_key="pub-1",
+    )
+    first = e.authorize(**auth_kw)
+    assert first["decision"] == "ESCALATE"
+    assert first["reason"] == "approval_required"
+    assert "grant_id" not in first
+
+    ticket = e.request_approval(
+        task_run_id=task["id"], tool_name="wp_publish",
+        site_id="teznevise.ir", resource_id="42", payload=payload,
+        snapshot_hash=snap["snapshot_hash"], context_receipt_id=pack["receipt_id"],
+        requested_by="mistral-publisher", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="pub-1", mutation_type="PUBLISH",
+    )
+    granted = e.decide_approval(
+        ticket["id"], approver="maziyar", decision="GRANT",
+        identity=IDENTITIES["HUMAN_APPROVER"],
+    )
+    consumed = e.consume_approval(
+        ticket["id"], granted["one_time_token"], payload, snap["snapshot_hash"],
+    )
+    assert consumed["state"] == "CONSUMED"
+
+    second = e.authorize(**auth_kw, approval_ticket_id=ticket["id"])
+    assert second["decision"] == "ALLOW", second
+    assert second.get("grant_id")
+    again = e.authorize(**auth_kw, approval_ticket_id=ticket["id"])
+    assert again["grant_id"] == second["grant_id"]
+
+    j = e.journal_intent(
+        task_run_id=task["id"], idempotency_key="pub-1",
+        tool_name="wp_publish", site_id="teznevise.ir", resource_id="42",
+        payload=payload, snapshot_id=snap["id"],
+        expected_postcondition={"http_status": 200, "meta": payload["meta"], "zwnj_rule": "zero"},
+    )
+    applied = e.apply_authorized_mutation(journal_id=j["id"])
+    assert applied["mutated"] is True
+    verified = e.verify_live(
+        site_id="teznevise.ir", resource_id="42",
+        expected={"http_status": 200, "meta": payload["meta"], "zwnj_rule": "zero"},
+        after_mutation_id=j["id"],
+    )
+    assert verified["passed"], verified
+
+
+def test_consumed_approval_is_bound_to_exact_context():
+    """B/C/D/E/H: wrong key, payload, site/resource, snapshot, or action is DENY."""
+    e, task, pack, snap, payload = _publisher()
+    ticket = e.request_approval(
+        task_run_id=task["id"], tool_name="wp_publish",
+        site_id="teznevise.ir", resource_id="42", payload=payload,
+        snapshot_hash=snap["snapshot_hash"], context_receipt_id=pack["receipt_id"],
+        requested_by="mistral-publisher", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="pub-1", mutation_type="PUBLISH",
+    )
+    granted = e.decide_approval(
+        ticket["id"], approver="maziyar", decision="GRANT",
+        identity=IDENTITIES["HUMAN_APPROVER"],
+    )
+    e.consume_approval(ticket["id"], granted["one_time_token"], payload, snap["snapshot_hash"])
+    base = dict(
+        action="wp_publish", payload=payload, passport=pack["passport"],
+        context_receipt=pack["receipt_id"], agent_id="mistral-publisher",
+        task_type="academic_content", site_id="teznevise.ir",
+        mutation_type="PUBLISH", snapshot_hash=snap["snapshot_hash"],
+        idempotency_key="pub-1", approval_ticket_id=ticket["id"],
+    )
+
+    wrong_key = e.authorize(**{**base, "idempotency_key": "pub-OTHER"})
+    assert wrong_key["decision"] == "DENY"
+    assert wrong_key["reason"] == "approval_idempotency_mismatch"
+
+    other_payload = {"resource_id": "42", "meta": {"yoast_title": "other"}}
+    wrong_payload = e.authorize(**{**base, "payload": other_payload})
+    assert wrong_payload["decision"] == "DENY"
+    assert wrong_payload["reason"] in ("approval_payload_mismatch", "approval_resource_mismatch")
+
+    other_resource = {"resource_id": "99", "meta": payload["meta"]}
+    wrong_resource = e.authorize(**{**base, "payload": other_resource})
+    assert wrong_resource["decision"] == "DENY"
+    assert wrong_resource["reason"] in ("approval_resource_mismatch", "approval_payload_mismatch")
+
+    wrong_site = e.authorize(**{**base, "site_id": "drbastaninejad.com"})
+    assert wrong_site["decision"] == "DENY"
+
+    wrong_snap = e.authorize(**{**base, "snapshot_hash": "not-the-authorised-hash"})
+    assert wrong_snap["decision"] == "DENY"
+    assert wrong_snap["reason"] == "approval_snapshot_mismatch"
+
+    # H: ticket cannot authorize a different action.
+    other_action = e.authorize(**{**base, "action": "wp_delete", "mutation_type": "DELETE"})
+    assert other_action["decision"] == "DENY"
+    assert other_action["reason"] == "approval_action_mismatch"
+
+    unconsumed = e.authorize(
+        **{k: v for k, v in base.items() if k != "approval_ticket_id"},
+        approval_ticket_id="missing-ticket",
+    )
+    assert unconsumed["decision"] == "DENY"
+    assert unconsumed["reason"] == "approval_ticket_missing"
+
+
+def test_consumed_approval_requires_fresh_receipt():
+    """F: expired/stale receipt cannot be used even with a consumed approval."""
+    frozen = {"t": datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)}
+
+    def clock():
+        return frozen["t"]
+
+    e = AdaEngine(hmac_key=HMAC, key_id="test-key", receipt_ttl=60, clock=clock)
+    seed_phase1(e)
+    e.register_passport(
+        agent_id="mistral-publisher", task_type="academic_content",
+        allowed_sites=["teznevise.ir"],
+        allowed_tools=["wp_read", "wp_update_metadata", "wp_publish"],
+        allowed_mutation_types=["METADATA_UPDATE", "PUBLISH"],
+    )
+    task = e.create_task(
+        idempotency_key="t-pub-exp", task_type="academic_content",
+        agent_id="mistral-publisher", requested_action="wp_publish",
+        site_id="teznevise.ir", project_id="teznevise",
+    )
+    pack = e.bootstrap(
+        agent_id="mistral-publisher", task_run_id=task["id"],
+        project_id="teznevise", site_id="teznevise.ir",
+        task_type="academic_content",
+    )
+    snap = e.snapshot("teznevise.ir", "42", "worker")
+    payload = {"resource_id": "42", "meta": {"yoast_title": "خدمات نگارش پایاننامه"}}
+    ticket = e.request_approval(
+        task_run_id=task["id"], tool_name="wp_publish",
+        site_id="teznevise.ir", resource_id="42", payload=payload,
+        snapshot_hash=snap["snapshot_hash"], context_receipt_id=pack["receipt_id"],
+        requested_by="mistral-publisher", identity=IDENTITIES["MODEL_PROPOSER"],
+        idempotency_key="pub-exp", mutation_type="PUBLISH",
+    )
+    granted = e.decide_approval(
+        ticket["id"], approver="maziyar", decision="GRANT",
+        identity=IDENTITIES["HUMAN_APPROVER"],
+    )
+    e.consume_approval(ticket["id"], granted["one_time_token"], payload, snap["snapshot_hash"])
+    frozen["t"] = frozen["t"] + timedelta(seconds=120)
+    d = e.authorize(
+        action="wp_publish", payload=payload, passport=pack["passport"],
+        context_receipt=pack["receipt_id"], agent_id="mistral-publisher",
+        task_type="academic_content", site_id="teznevise.ir",
+        mutation_type="PUBLISH", snapshot_hash=snap["snapshot_hash"],
+        idempotency_key="pub-exp", approval_ticket_id=ticket["id"],
+    )
+    assert d["decision"] == "DENY"
+    assert d["reason"] == "expired"
 

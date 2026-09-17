@@ -271,6 +271,40 @@ class AdaEngine:
             return False
         return mutation_type in allowed
 
+    def _approval_satisfies(
+        self, *, ticket_id: str, action: str, payload: dict,
+        site_id: Optional[str], snapshot_hash: Optional[str],
+        idempotency_key: Optional[str], context_receipt: Optional[str],
+        mutation_type: Optional[str],
+    ) -> tuple[bool, str]:
+        """Consumed approval may satisfy ESCALATE only for the exact bound context."""
+        t = self.approvals.get(ticket_id)
+        if not t:
+            return False, "approval_ticket_missing"
+        if t["state"] != "CONSUMED":
+            return False, "approval_not_consumed"
+        if t["expires_at"] <= self.now():
+            return False, "approval_expired"
+        if t.get("tool") != action:
+            return False, "approval_action_mismatch"
+        if t.get("site_id") != site_id:
+            return False, "approval_site_mismatch"
+        resource_id = (payload or {}).get("resource_id")
+        if t.get("resource_id") != resource_id:
+            return False, "approval_resource_mismatch"
+        if t.get("payload_hash") != sha256_obj(payload or {}):
+            return False, "approval_payload_mismatch"
+        if t.get("snapshot_hash"):
+            if not snapshot_hash or snapshot_hash != t["snapshot_hash"]:
+                return False, "approval_snapshot_mismatch"
+        if t.get("idempotency_key") != idempotency_key:
+            return False, "approval_idempotency_mismatch"
+        if t.get("context_receipt_id") != context_receipt:
+            return False, "approval_receipt_mismatch"
+        if t.get("mutation_type") and t["mutation_type"] != mutation_type:
+            return False, "approval_mutation_mismatch"
+        return True, "ok"
+
     def _stored_passport(self, passport: Optional[dict], agent_id: str, task_type: str) -> tuple[Optional[dict], Optional[str]]:
         """Use the currently stored passport. Never trust a caller-supplied stale copy."""
         if passport is None:
@@ -603,7 +637,8 @@ class AdaEngine:
                   snapshot_hash: Optional[str] = None,
                   idempotency_key: Optional[str] = None,
                   model_confidence: Optional[float] = None,
-                  identity: str = "execution_worker") -> dict:
+                  identity: str = "execution_worker",
+                  approval_ticket_id: Optional[str] = None) -> dict:
         """Deterministic ALLOW | DENY | ESCALATE. Ignores model confidence."""
         _ = model_confidence  # never consulted
         tool = self.tools.get(action)
@@ -684,19 +719,55 @@ class AdaEngine:
                 out = {"decision": "DENY", "reason": "model_cannot_modify_policy"}
                 self.audit_log(identity, "authorize", **out, tool=action)
                 return out
-            if tool["side_effect_class"] == "DELETE" and not pp.get("deletion_permission"):
-                out = {"decision": "ESCALATE", "reason": "deletion_requires_approval"}
-                self.audit_log(identity, "authorize", **out, tool=action)
-                return out
             if batch_size > pp["max_batch_size"]:
                 out = {"decision": "ESCALATE", "reason": "batch_exceeds_passport"}
                 self.audit_log(identity, "authorize", **out, tool=action)
                 return out
-            if (tool["side_effect_class"] in pp["approval_classes"]
-                    or tool["default_decision"] == "ESCALATE"
-                    or pp.get("approval_mandatory")
-                    or mutation_type in ("PUBLISH", "DELETE", "CANONICAL_OWNERSHIP", "POLICY_CHANGE")):
-                out = {"decision": "ESCALATE", "reason": "approval_required"}
+            deletion_needs_human = (
+                tool["side_effect_class"] == "DELETE" and not pp.get("deletion_permission")
+            )
+            needs_approval = (
+                deletion_needs_human
+                or tool["side_effect_class"] in pp["approval_classes"]
+                or tool["default_decision"] == "ESCALATE"
+                or pp.get("approval_mandatory")
+                or mutation_type in ("PUBLISH", "DELETE", "CANONICAL_OWNERSHIP", "POLICY_CHANGE")
+            )
+            if needs_approval:
+                if not approval_ticket_id:
+                    reason = "deletion_requires_approval" if deletion_needs_human else "approval_required"
+                    out = {"decision": "ESCALATE", "reason": reason}
+                    self.audit_log(identity, "authorize", **out, tool=action)
+                    return out
+                ok_appr, appr_why = self._approval_satisfies(
+                    ticket_id=approval_ticket_id, action=action, payload=payload or {},
+                    site_id=site_id, snapshot_hash=snapshot_hash,
+                    idempotency_key=idempotency_key, context_receipt=context_receipt,
+                    mutation_type=mutation_type,
+                )
+                if not ok_appr:
+                    out = {"decision": "DENY", "reason": appr_why}
+                    self.audit_log(identity, "authorize", **out, tool=action)
+                    return out
+                decision = "ALLOW"
+                reason = "ok"
+                grant_id = (
+                    f"{context_receipt}:{sha256_obj(payload or {})}:{action}:"
+                    f"{site_id}:{idempotency_key}"
+                )
+                self._authz_grants[grant_id] = {
+                    "id": grant_id, "decision": "ALLOW", "action": action,
+                    "agent_id": agent_id, "task_type": task_type, "site_id": site_id,
+                    "resource_id": (payload or {}).get("resource_id"),
+                    "passport_id": pp["id"], "passport_version": pp["version"],
+                    "receipt_id": context_receipt,
+                    "payload_hash": sha256_obj(payload or {}),
+                    "mutation_type": mutation_type, "snapshot_hash": snapshot_hash,
+                    "idempotency_key": idempotency_key,
+                    "approval_ticket_id": approval_ticket_id,
+                    "at": self.now(),
+                }
+                out = {"decision": decision, "reason": reason, "grant_id": grant_id}
                 self.audit_log(identity, "authorize", **out, tool=action)
                 return out
         decision = tool["default_decision"] if tool["default_decision"] != "DENY" else "DENY"
@@ -727,7 +798,10 @@ class AdaEngine:
     def request_approval(self, *, task_run_id: str, tool_name: str, site_id: Optional[str],
                          resource_id: Optional[str], payload: dict, snapshot_hash: Optional[str],
                          context_receipt_id: str, requested_by: str, identity: str,
+                         idempotency_key: str, mutation_type: Optional[str] = None,
                          ttl_seconds: int = 3600) -> dict:
+        if not idempotency_key:
+            raise AdaError("INVALID_IDEMPOTENCY_KEY", "approval requires idempotency_key")
         ok, why, rec = self.validate_receipt(context_receipt_id)
         if not ok:
             raise AdaError("INVALID_RECEIPT", why)
@@ -749,6 +823,7 @@ class AdaEngine:
             "payload_hash": ph, "snapshot_hash": snapshot_hash,
             "context_receipt_id": context_receipt_id, "dependency_hash": dh,
             "requested_by": requested_by, "requester_identity": identity,
+            "idempotency_key": idempotency_key, "mutation_type": mutation_type,
             "state": "PENDING", "approved_by": None, "approver_identity": None,
             "expires_at": expires, "one_time_token_hash": None, "consumed_at": None,
             "approval_id": None, "events": [{"event": "REQUESTED", "actor": requested_by, "at": self.now().isoformat()}],
