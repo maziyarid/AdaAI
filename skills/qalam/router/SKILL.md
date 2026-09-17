@@ -38,7 +38,18 @@ Do not ask the user to repeat information that memory can recover. Current expli
 
 ### 3. Load the writing stack
 
-Load canonical `art-of-writing-bible` latest version plus only the required overlay:
+Resolve versions and overlay paths from `skills/qalam/RELEASE.json`. Do not hard-code a current Qalam or Bible version.
+
+For every writing task, load:
+
+1. Qalam router (`components.qalam-router`);
+2. Art of Writing Bible (`components.art-of-writing-bible`);
+3. every Bible companion listed in `RELEASE.json` `loading.bible_companions`;
+4. **every overlay listed for the selected profile** in `RELEASE.json` (not unrelated profiles).
+
+"Only the needed overlay" forbids loading *unrelated profiles*. It does not authorize skipping the Bible, Bible companions, or listed profile overlays.
+
+Profiles:
 
 - academic → `ACADEMIC_READABLE`
 - methodology/statistics → `RESEARCH_GUIDE`
@@ -50,13 +61,15 @@ Load canonical `art-of-writing-bible` latest version plus only the required over
 For Iran-targeted product/UI/form/service/landing work, load in this order:
 
 1. Art of Writing Bible;
-2. `UX_WRITING_FA_IR`;
-3. `writing/art-of-writing-bible/references/fa-ir-product-lexicon.md` (or the Content Factory `fa-IR Product Lexicon` operational copy);
-4. the current site/product policy.
+2. `UX_WRITING_FA_IR` → `skills/qalam/fa-ir-overlays/ux-writing-fa-ir.md`;
+3. Iranian product lexicon → `skills/qalam/fa-ir-overlays/fa-ir-product-lexicon.md` (from `RELEASE.json` `overlays.fa-ir-product-lexicon`);
+4. tool routing overlay when the profile lists it → `skills/qalam/fa-ir-overlays/tool-routing.md`;
+5. the current site/product policy.
 
 The site/product layer is last because site-approved or user-tested terminology can override the baseline lexicon. On Teznevise, the site-specific 0-U+200C rule overrides general Persian orthography.
 
 Unknown locale-sensitive wording must be marked for review rather than silently replaced. Do not describe legitimate Dari/Persian vocabulary as inherently wrong; the criterion is fit for the target product audience.
+
 
 ### 4. Route tools by role
 

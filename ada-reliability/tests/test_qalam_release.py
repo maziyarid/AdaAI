@@ -34,6 +34,14 @@ def test_docs_do_not_claim_1_4_0_is_current():
     root = Path(load_release()["_root"])
     readme = (root / "skills/qalam/AGENTS-WRITING-README.md").read_text(encoding="utf-8")
     runtime = (root / "skills/qalam/router/RUNTIME-INTEGRATION.md").read_text(encoding="utf-8")
+    skill = (root / "skills/qalam/router/SKILL.md").read_text(encoding="utf-8")
     assert "RELEASE.json" in readme
     assert "Do not set `QALAM_CANONICAL_VERSION=1.4.0`" in runtime
     assert "- `QALAM_CANONICAL_VERSION=1.4.0`" not in runtime
+    stale = "writing/art-of-writing-bible/references/fa-ir-product-lexicon.md"
+    assert stale not in skill
+    assert "skills/qalam/fa-ir-overlays/fa-ir-product-lexicon.md" in skill
+    rel = load_release()
+    for path in rel["overlays"].values():
+        assert (root / path).is_file(), path
+
