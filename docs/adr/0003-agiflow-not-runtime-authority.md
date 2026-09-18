@@ -56,6 +56,7 @@ AAX-12 implements an `AGIFLOW_STATE_STEWARD` / projection bridge with these cons
 
 - AAX-6 is the architecture-decision task and can close once this superseding contract is recorded.
 - AAX-12 is the implementation task for the Agiflow coordination/state-steward projection.
+- In-repo implementation: `ada-reliability/src/ada_reliability/agiflow_steward.py` (projection + outbox + FakeAgiflow). Additive SQL: `ada-reliability/sql/mariadb/005_ada_agiflow_projection.sql`. Live VPS wiring remains AAX-3/AAX-12 canary, not this ADR.
 - MariaDB/control-core remains runtime truth.
 - ClickUp is no longer required for new Mistral execution or completion tracking.
 - Agiflow becomes the common coordination surface without becoming a second scheduler or runtime authority.

@@ -20,3 +20,15 @@ def test_policy_releases_enforce_one_active_per_component():
 def test_memory_seed_insert_is_documented_ignore():
     text = (SQL / "001_ada_memory.sql").read_text(encoding="utf-8")
     assert "INSERT IGNORE INTO ada_scope_versions" in text
+
+
+def test_agiflow_outbox_is_idempotent_and_additive():
+    text = (SQL / "005_ada_agiflow_projection.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS ada_agiflow_task_map" in text
+    assert "CREATE TABLE IF NOT EXISTS ada_agiflow_outbox" in text
+    assert "UNIQUE KEY uq_ada_agiflow_outbox_idem (idempotency_key)" in text
+    assert "UNIQUE KEY uq_ada_agiflow_task (agiflow_task_id)" in text
+    assert "DROP TABLE" not in text
+    # Must not claim ownership of control-core jobs/schedules.
+    assert "CREATE TABLE IF NOT EXISTS jobs" not in text
+    assert "CREATE TABLE IF NOT EXISTS schedules" not in text

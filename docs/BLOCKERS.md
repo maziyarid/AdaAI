@@ -1,10 +1,10 @@
 # Phase-1 blocker report
 
-Status: **engine + contract tests restored on the branch and 43 pytest green in a clean venv. Production import and canary not executed.**
+Status: **engine + AAX-12 steward in-repo. 72 engine tests plus steward suite green locally. Production import and canary not executed.**
 
 ## Blocker 1 — no SSH/SentinelX from this Grok session
 
-**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture, production shadow wrap (AAX-3).
+**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture, production shadow wrap (AAX-3), live Agiflow board canary (AAX-12 last AC).
 
 **Evidence:** this session has GitHub and Agiflow connectors, not SSH. A PR comment claims VPS access exists for some agents; that is not the same as this session having a live shell on the host. Do not treat the old "no VPS anywhere" sentence as current, and do not treat this session as having imported the control core.
 
@@ -18,25 +18,26 @@ Status: **engine + contract tests restored on the branch and 43 pytest green in 
 
 ## Blocker 2 — production canary not authorized
 
-Do not run a live Teznevise mutation without explicit human approval after shadow evidence (AAX-8).
+Do not run a live Teznevise mutation without explicit human approval after shadow evidence (AAX-8). Do not treat the in-process AAX-12 canary as a live board canary.
 
 ## Blocker 3 — Bible / router versions are independent
 
 Do not collapse router 1.1.0, Bible 2.0.0, eval pack 1.3.0, or the historical 1.4.0 docs label into one number. `skills/qalam/RELEASE.json` is the pointer.
 
-## Blocker 4 — GitHub Contents API / payload size (resolved this session)
+## Blocker 4 — GitHub Contents API / payload size (resolved)
 
 Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushed with git, not the Contents API. Placeholders must not return.
 
 ## Blocker 5 — GitHub Actions may still not start
 
-`docs/CI.md` records that hosted runners previously failed before any step. `.github/workflows/ada-reliability.yml` is added anyway. Equivalent proof this session: clean venv `pip install -e ada-reliability` + `43 passed`.
+`docs/CI.md` records that hosted runners previously failed before any step. `.github/workflows/ada-reliability.yml` is added anyway. Equivalent proof: clean venv `pip install -e ada-reliability` + pytest.
 
 ## Non-blockers (done)
 
-- Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied.
+- Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied. Includes `005_ada_agiflow_projection.sql`.
 - `path_hash` uniqueness and one-ACTIVE release constraint in SQL.
 - Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
 - HMAC receipts carry `signature_alg` + `key_id`.
-- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode in restored engine.
-- 43 pytest green from installed package + working tree.
+- Fail-closed authorize / approvals / journal / ZWNJ / shadow mode.
+- AAX-12 in-repo Agiflow steward: mapping, evidence-backed Review, human-edit conflict, outbox replay, no runtime writes, no ClickUp dependency.
+- Engine + steward pytest green from the working tree.

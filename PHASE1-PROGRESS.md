@@ -1,5 +1,31 @@
 # Phase 1 reliability progress log
 
+## 2026-09-18 — AAX-12 Agiflow state steward (in-repo, no VPS)
+
+**Session:** continue Phase 1 after AAX-2 Review at `16b78c9`. Greptile on that SHA: merge-safe, 5/5, 0 blocking issues.
+
+### Done this session
+- Implemented `ada_reliability.agiflow_steward` against ADR-0003:
+  stable durable-job ↔ Agiflow-task mapping, runtime-state projection,
+  evidence-backed Review/Done, human-edit conflict preservation,
+  durable outbox + idempotent replay, projection rollback that does not
+  mutate runtime jobs.
+- Steward cannot enqueue/lease/schedule and cannot call Agiflow execute.
+- ClickUp is accepted only as an ignored spy; tests prove it is never called.
+- Additive SQL `005_ada_agiflow_projection.sql` (`ada_agiflow_task_map`,
+  `ada_agiflow_outbox`, `ada_agiflow_projection_events`). Not applied.
+- In-process canary covers queued → In Progress → outage → verified Review
+  → projection rollback. This is **not** a live VPS canary.
+
+### Still blocked
+1. No SSH/SentinelX this session → AAX-3 live control-core import.
+2. Production SQL not applied (AAX-7).
+3. Live Teznevise canary not authorized (AAX-8).
+4. Live durable-job → Agiflow board canary (AAX-12 last AC) needs VPS + mapping to a real Agiflow project.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
 ## 2026-09-17 — AAX-1 restore + AAX-2 fail-closed bindings (Grok)
 
 **Session:** Grok with GitHub + Agiflow. PR head before this commit: `66c850df9eacbd9c55e496d1d7bbd5fb104c52c2`.

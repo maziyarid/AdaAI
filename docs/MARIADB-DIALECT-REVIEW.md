@@ -8,6 +8,7 @@ Reviewed files:
 - `ada-reliability/sql/mariadb/002_ada_receipts_passports.sql`
 - `ada-reliability/sql/mariadb/003_ada_approvals_journal.sql`
 - `ada-reliability/sql/mariadb/004_ada_qalam_eval.sql`
+- `ada-reliability/sql/mariadb/005_ada_agiflow_projection.sql`
 
 ## Compatible with MariaDB 10.11
 
@@ -22,6 +23,7 @@ Reviewed files:
 - Prefix `ada_` — does not collide with documented control-core job/schedule/lease tables
 - `ada_policy_releases.active_component` VIRTUAL generated column + UNIQUE (MariaDB 10.2+; multiple NULLs allowed, so only one ACTIVE row per component)
 - `ada_qalam_assets.path_hash CHAR(64)` primary-key component (full-path SHA-256) instead of unique `path(191)` prefix
+- `ada_agiflow_task_map` / `ada_agiflow_outbox` / `ada_agiflow_projection_events` — projection only; unique durable_job_id and outbox idempotency_key; no jobs/schedules tables
 
 ## Intentional absences (do not add)
 
