@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
 
