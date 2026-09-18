@@ -1074,6 +1074,38 @@ class AdaEngine:
                 live_store.verification_stale = False
         return rec
 
+    def _live_meets_expected(
+        self, live: Optional[LiveResource], expected: Optional[dict], site_id: str,
+    ) -> bool:
+        """True iff live state proves the journal postcondition for recovery.
+
+        HTTP success is mandatory (omitted http_status means 200). A missing
+        resource, 404/500, meta/content mismatch, or Teznevise ZWNJ failure
+        is not "already applied".
+        """
+        if live is None:
+            return False
+        expected = expected or {}
+        required_status = expected["http_status"] if "http_status" in expected else 200
+        if live.http_status != required_status:
+            return False
+        if "meta" in expected:
+            for k, v in expected["meta"].items():
+                if live.meta.get(k) != v:
+                    return False
+        if "content" in expected and live.content != expected["content"]:
+            return False
+        zwnj_applied = (
+            site_id in ("teznevise.ir", "teznevise")
+            or expected.get("zwnj_rule") == "zero"
+        )
+        if zwnj_applied:
+            blob = live.content + " " + " ".join(str(x) for x in live.meta.values())
+            ok, _n = self.teznevise_zwnj_ok(blob)
+            if not ok:
+                return False
+        return True
+
     def apply_authorized_mutation(self, *, journal_id: str, shadow: bool = False) -> dict:
         j = self.journal[journal_id]
         if j.get("authorize_decision") != "ALLOW" or not j.get("receipt_id"):
@@ -1089,15 +1121,13 @@ class AdaEngine:
             return {"status": j["status"], "mutated": False, "journal": j, "deduped": True}
 
         if j["status"] == "EXECUTING":
-            # crash-after-remote-success: re-read live, do not blindly retry
+            # crash-after-remote-success: re-read live, do not blindly retry.
+            # Meta match alone is not enough — HTTP-success (default 200),
+            # content, and Teznevise ZWNJ must also hold, or we fail closed
+            # rather than reporting APPLIED for a 404/500 resource.
             live = self.wp.read(j["site_id"], j["resource_id"])
-            expected = j["expected_postcondition"]
-            already = True
-            if "meta" in expected:
-                for k, v in expected["meta"].items():
-                    if not live or live.meta.get(k) != v:
-                        already = False
-            if already:
+            expected = j.get("expected_postcondition") or {}
+            if self._live_meets_expected(live, expected, j["site_id"]):
                 j["status"] = "APPLIED"
                 j["updated_at"] = self.now()
                 self._stale_prior_verifications(j["site_id"], j["resource_id"])

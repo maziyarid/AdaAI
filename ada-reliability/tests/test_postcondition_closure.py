@@ -18,6 +18,8 @@ Covers AAX-2 P1 "Journaled Postcondition Is Ignored":
   N4. closure re-checks live HTTP even if the journal omitted it
   O. ZWNJ failure key is teznevise_zwnj (not teznevise_zwnjj)
   O2. Teznevise ZWNJ check runs even when zwnj_rule is omitted
+  P. timeout recovery with live 404/500 does not mark APPLIED
+  Q. timeout recovery with matching HTTP 200 still marks APPLIED (no retry)
 """
 import pytest
 
@@ -457,3 +459,53 @@ def test_O2_teznevise_zwnj_checked_even_when_rule_omitted():
     with pytest.raises(AdaError):
         e.close_task_if_verified(task["id"], j["id"])
     assert e.tasks[task["id"]]["state"] != "COMPLETED"
+
+
+# -- AAX-2 residual: EXECUTING timeout recovery must require HTTP success --
+
+def _timeout_setup():
+    """Journal + first apply that times out after a possible remote success."""
+    e, task, j, payload = _setup(applied=False)
+    e.wp.timeout_next_write = True
+    r1 = e.apply_authorized_mutation(journal_id=j["id"])
+    assert r1.get("uncertain") is True
+    assert r1["status"] == "EXECUTING"
+    assert j["status"] == "EXECUTING"
+    return e, task, j, payload
+
+
+def test_P_timeout_recovery_rejects_non_success_http():
+    """Meta already written + HTTP 500 must not be treated as APPLIED."""
+    e, task, j, payload = _timeout_setup()
+    live = e.wp.resources[("teznevise.ir", "42")]
+    assert live.meta.get("yoast_title") == payload["meta"]["yoast_title"]
+    live.http_status = 500
+    writes = e.wp.writes
+    with pytest.raises(AdaError) as ei:
+        e.apply_authorized_mutation(journal_id=j["id"])
+    assert ei.value.code == "SNAPSHOT_MISMATCH"
+    assert j["status"] != "APPLIED"
+    assert e.wp.writes == writes  # no second remote write
+    assert e.tasks[task["id"]]["state"] != "COMPLETED"
+
+
+def test_P2_timeout_recovery_rejects_missing_resource():
+    e, task, j, payload = _timeout_setup()
+    del e.wp.resources[("teznevise.ir", "42")]
+    writes = e.wp.writes
+    with pytest.raises(AdaError) as ei:
+        e.apply_authorized_mutation(journal_id=j["id"])
+    assert ei.value.code in ("SNAPSHOT_MISMATCH", "UNKNOWN_RESOURCE")
+    assert j["status"] != "APPLIED"
+    assert e.wp.writes == writes
+
+
+def test_Q_timeout_recovery_with_http_200_still_applied():
+    """Happy path: timed-out write that actually landed + HTTP 200 => APPLIED, no retry."""
+    e, task, j, payload = _timeout_setup()
+    writes = e.wp.writes
+    r2 = e.apply_authorized_mutation(journal_id=j["id"])
+    assert r2.get("rechecked") is True
+    assert r2["mutated"] is False
+    assert r2["status"] == "APPLIED"
+    assert e.wp.writes == writes
