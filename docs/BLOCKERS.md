@@ -1,12 +1,12 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (lease-expire CAS + retry budget at `2dd1ffb`; result-write `apply_if_claim` fencing after Greptile 4/5 on `d3c8c34`). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Greptile independently reviewed `3513278` at 5/5 (no outstanding P0/P1). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. AAX-4 `/health` 401 caller identified from live source (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS`). Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 
 **Resolved this session:** viewer profile `grok-ada-readonly` can `pwd`, `ls /opt`, and `cat` the control-core unit. `/opt/maziyar-control-core` exists on `server.maziyarid.com`. Inventory is in `docs/AAX3-LIVE-BASELINE.md`.
 
-**Still blocked:** current viewer classifier refuses `ls`/`cat`/`stat`/`systemctl`/`sha256sum` on this readOnly profile (stricter than the 22:15Z capture). `state/` and `tools/` remain mode-denied. No `mysqldump --no-data`. AAX-4 `/health` 401 caller and AAX-5/AAX-7 live table proofs therefore remain open. Do not clear `readOnly` to get those commands.
+**Still blocked:** `systemctl` ActiveState/SubState and `sha256sum` remain refused on this readOnly profile. `state/` and `tools/` remain mode-denied. No `mysqldump --no-data`. Live `ada_*` vs `pd_*` table list therefore remains open. Do not clear `readOnly` to get those commands. AAX-4 `/health` 401 caller is now identified from live `control_core.py` (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS` expects 401 as healthy); do not weaken auth.
 
 **Do not use the Content/Royadarman host as Ada.** That host still lacks `/opt/maziyar-control-core`.
 
@@ -14,8 +14,8 @@ Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (lease-expi
 
 1. `mysqldump --no-data` control-core schema (table names / indexes only).
 2. `systemctl status maziyar-control-core.service` (ActiveState only).
-3. Confirm presence/absence of `ada_*` vs live `pd_*`.
-4. Identify the localhost `/health` 401 caller (AAX-4) without weakening auth.
+3. Confirm presence/absence of live MariaDB `ada_*` vs `pd_*` (source has no `ada_*` / `pd_worker_runs` / `pd_outbox` names).
+4. Optional later AAX-4 code change: add no-secrets `/livez` and point `HEALTH_TARGETS` at it. Do **not** strip `CONTROL_API_TOKEN` from `/health`.
 
 ## Blocker 2 — production canary not authorized
 

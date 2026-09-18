@@ -40,8 +40,56 @@ SELECT scope_type, scope_id, version FROM ada_scope_versions;
 
 Existing `jobs` / `schedules` / lease tables must still be readable.
 
-## What this session did not do
+## Live source reconciliation (AAX-7, SQL not applied)
 
-- Did not connect to production MariaDB.
-- Did not import `/opt/maziyar-control-core` from this session (no SSH here).
-- Did not run a live canary.
+Captured 2026-09-19 from `control_core.py` on `server.maziyarid.com`
+(65370 bytes / 1096 lines). This is source schema, **not** a live
+`SHOW TABLES` dump.
+
+### Already in live control-core source
+
+`schema_migrations`, `agent_events`, `canonical_tasks`, `jobs`,
+`job_results`, `schedules`, `dead_letter_queue`, `service_health`,
+`operator_reachability`, `operator_state`, `cache_manifest`,
+`harvest_provider_state`, `tool_harvest_queue`, `data_snapshots`,
+`intelligence_findings`, `forecasts`, `content_gate_states`,
+`green_buffers`, `pending_external_sync` (with `locked_by` /
+`lease_until`), `audit_log`.
+
+No `ada_*` names. No `pd_worker_runs`. No `pd_outbox`.
+
+### Separate live artefacts (AAX-12 / AAX-15 canaries)
+
+Prior VPS canaries used `pd_worker_runs` and `pd_outbox`. Those names
+are **not** defined in `control_core.py`. Do not invent a second
+runtime outbox. Reconcile `pd_*` against `006_ada_failed_runs` before
+any apply: `006` is Ada execution-recovery, distinct from both live
+`pending_external_sync` and AAX-12 `ada_agiflow_outbox`.
+
+### Additive repo tables (not in production source)
+
+- `001` memory: `ada_scope_versions`, `ada_memory_records`,
+  `ada_memory_versions`, `ada_project_states`
+- `002` receipts: `ada_policy_releases`, `ada_agent_passports`,
+  `ada_tool_registry`, `ada_context_receipts`, `ada_receipt_dependencies`
+- `003` journal: `ada_approval_tickets`, `ada_approval_events`,
+  `ada_snapshots`, `ada_mutation_journal`, `ada_verifications`,
+  `ada_external_inputs`
+- `004` qalam: `ada_qalam_assets`, `ada_model_registry`,
+  `ada_eval_traces`, `ada_mirror_events`, `ada_backup_runs`,
+  `ada_audit_events`
+- `005` AAX-12 projection: `ada_agiflow_task_map`, `ada_agiflow_outbox`,
+  `ada_agiflow_evidence`, `ada_agiflow_close_grants`,
+  `ada_agiflow_projection_events`
+- `006` AAX-15 recovery: `ada_failed_runs`, `ada_failed_run_events`
+  (documents claim / expire / result CAS on `claim_generation`)
+
+`ada-context-core/sql/001_schema.sql` is the older PostgreSQL-shaped
+contract. It is **not** the production apply path. Live authority is
+MariaDB `control_core.py` + additive `ada-reliability/sql/mariadb/*`.
+
+## What this branch has not done
+
+- Did not connect to production MariaDB / did not `SHOW TABLES`.
+- Did not apply any `ada_*` SQL.
+- Did not run a live Teznevise / WordPress write canary.

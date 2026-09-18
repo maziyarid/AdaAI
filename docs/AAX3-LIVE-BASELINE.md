@@ -114,8 +114,17 @@ No `ada_*` table names appear in this live source file. Live confirmation
 of `ada_*` vs `pd_*` still needs `mysqldump --no-data` or equivalent
 under an approved account. Viewer cannot query MariaDB.
 
-Seeded schedules named in README: `SEO_SCOUT`, `PROJECT_CONTROLLER`,
-`ORACLE_FORECASTER`, `BLACKOUT_SENTINEL`.
+Seeded schedules from live `seed_schedules()` (interval seconds in
+source; live `enabled` flags are unconfirmed without MariaDB):
+
+- `BLACKOUT_SENTINEL` / `blackout_sentinel.run` — 300
+- `PROJECT_CONTROLLER` / `project_controller.run` — 600
+- `CLICKUP_STATE_STEWARD` / `clickup_state_steward.run` — 600
+  (legacy compatibility seed; AAX-6/AAX-12 still treat ClickUp as
+  non-runtime)
+- `SEO_SCOUT` / `seo_scout.run` — 3600
+- `TEMP_TOOL_HARVESTER` / `temp_tool_harvester.run` — 900
+- `ORACLE_FORECASTER` / `oracle_forecaster.run` — 86400
 
 ## Explicitly not captured
 
@@ -124,7 +133,6 @@ Seeded schedules named in README: `SEO_SCOUT`, `PROJECT_CONTROLLER`,
 - Live systemd ActiveState
 - Live MariaDB table list, row counts, leases, `pending_external_sync`
   conflict rows
-- `/health` probe caller (AAX-4)
 - Production apply of repo `ada_*` SQL
 
 ## Session addendum 2026-09-19 (after PR head `2dd1ffb`)
@@ -150,15 +158,123 @@ classified-safe tools (`ls`, `cat`, `grep`, `stat`, `systemctl`,
 is classified destructive and refused. Do not clear `readOnly`.
 Do not treat this as Ada SSH being down again.
 
-Still not captured: source sha256, systemd ActiveState/SubState,
-live `SHOW TABLES` / `mysqldump --no-data`, `ada_*` vs `pd_*`,
-`pending_external_sync` rows, `/health` caller (AAX-4).
+## Session addendum 2026-09-19T23:05Z (PR head `3513278`)
+
+Classifier this session allowed `ls`, `cat`, `grep`, `head`, and `wc`
+again. `systemctl` and `sha256sum` remain refused. `readOnly` stays on.
+Do not treat classifier flapping as host disappearance.
+
+Reconfirmed without secrets:
+
+- Hostname: `server.maziyarid.com`
+- `wc -c` / `wc -l` on `control_core.py`: 65370 bytes / 1096 lines
+- `ls /opt/maziyar-control-core` still shows `control_core.py`,
+  `clickup_state_steward.py`, `tool_harvester.py`, `venv/`, plus
+  `state/` and `tools/` (viewer still cannot list those two)
+- Unit text for `maziyar-control-core.service` unchanged
+  (User/Group `mazcontrol`, WorkingDirectory
+  `/opt/maziyar-control-core`, EnvironmentFile
+  `/etc/maziyar-control-core.env` unread, ExecStart venv python
+  `control_core.py serve`, `ProtectSystem=strict`,
+  `ReadWritePaths=/opt/maziyar-control-core/state`)
+- Source `CREATE TABLE IF NOT EXISTS` list unchanged. **No `ada_*`
+  names in live `control_core.py`.**
+- `grep pd_worker_runs` / `grep pd_outbox` / `grep pd_` on
+  `control_core.py` are empty. Live ChatGPT canary tables
+  `pd_worker_runs` / `pd_outbox` are not defined in this file;
+  they remain a separate VPS artefact to reconcile at AAX-7.
+- `clickup_state_steward.py` is still mode-denied for this viewer.
+
+### AAX-4 caller (source evidence, no auth change)
+
+Localhost `GET /health` every ~5 minutes is **not** an unknown
+external monitor. Live `control_core.py` defines:
+
+- `HEALTH_TARGETS` includes
+  `("control-core", "http://127.0.0.1:8770/health", (401,))`
+- Comment on that table: “An HTTP 401 is healthy for protected MCP
+  resources.”
+- `seed_schedules()` registers `BLACKOUT_SENTINEL` /
+  `blackout_sentinel.run` at **300 seconds**
+- `run_sentinel()` probes each target and sets
+  `ok = probe["status"] in expected`
+
+So 401 on unauthenticated `/health` is the **configured healthy
+signal** for this protected endpoint. The HTTP handler also has a
+`GET /health` → 200 JSON branch; credential-free probes never reach
+it. Do **not** make `/health` public. Do **not** weaken
+`CONTROL_API_TOKEN` auth.
+
+A later code change, if wanted, should add a separate
+no-secrets `/livez` and point `HEALTH_TARGETS` at that path — not
+strip auth from `/health`. Not implemented here. No production
+mutation.
+
+`maziyar-mcp-self-heal.timer` is every 1 minute and targets MCP
+OAuth/gateway (`ExecStart=/usr/local/sbin/maziyar-mcp-self-heal`).
+That is not the control-core `/health` 401 loop.
+
+### Smallest extra read-only scope still needed
+
+Keep `grok-ada-readonly` as-is. Preferred extra profile is a
+`mazcontrol` **read-only** command allowlist, not root:
+
+1. `systemctl show -p ActiveState,SubState,MainPID,FragmentPath,ExecStart`
+   for `maziyar-control-core.service`,
+   `maziyar-mistral-worker.service`,
+   `maziyar-agiflow-outbox-bridge.timer` only
+2. `sha256sum /opt/maziyar-control-core/control_core.py`
+3. Schema-only MariaDB: `mysqldump --no-data --skip-comments`
+   or `SHOW TABLES` / `SHOW CREATE TABLE` as the `mazcontrol`
+   DB user (names/indexes/constraints only)
+4. Optional: `journalctl -u maziyar-control-core.service -n 50 --no-pager`
+   with secret redaction
+
+Still deny: arbitrary sudo, service restart, package install,
+file writes, SQL DML/DDL apply, reading
+`/etc/maziyar-control-core.env` or other secret files.
+
+## Session addendum 2026-09-19 (fresh Grok account, Greptile 5/5)
+
+Independent reconfirm of live Ada-readonly SSH after Greptile
+reviewed `3513278` at **5/5** with no outstanding P0/P1.
+
+- `pwd` = `/home/mistralops`
+- `uname -n` = `server.maziyarid.com`
+- `ls /opt/maziyar-control-core` still lists `control_core.py`,
+  `clickup_state_steward.py`, `tool_harvester.py`, `venv/`, `state/`,
+  `tools/`, README, and dated `.bak*` copies
+- `wc -c` / `wc -l` = **65370 bytes / 1096 lines**
+- `grep ada_`, `grep pd_worker_runs`, `grep pd_outbox` on
+  `control_core.py` all exit 1 (no matches)
+- `pending_external_sync` **is** a live control-core table (CREATE +
+  lease columns `locked_by` / `lease_until`)
+- systemd unit text re-read: User/Group `mazcontrol`, Requires
+  `mariadb.service`, EnvironmentFile unread, ExecStart venv python
+  `control_core.py serve`, `ProtectSystem=strict`
+- Mistral worker unit: User `maziyarid`, ExecStart
+  `/usr/bin/node /srv/community-mcp/mistral-worker/index.mjs`
+- Agiflow outbox bridge timer: `OnUnitActiveSec=5min`
+- Env **names** reconfirmed (values not read): `CONTROL_DB_HOST`,
+  `CONTROL_DB_PORT`, `CONTROL_DB_USER`, `CONTROL_DB_PASSWORD`,
+  `CONTROL_DB_NAME`, `CONTROL_API_TOKEN`, `CONTROL_ACTOR`,
+  `CONTROL_BIND`, `CONTROL_PORT`, `MISTRAL_API_KEY`,
+  `MISTRAL_API_BASE`, `MISTRAL_DEFAULT_MODEL`, `GROK_CLICKUP_USER_ID`
+- `systemctl show` still POLICY_DENIED. `sha256sum` still gated.
+- No production SQL. No live canary. `readOnly` stays on.
+
+AAX-4 source proof reconfirmed: `HEALTH_TARGETS` control-core row is
+`("control-core", "http://127.0.0.1:8770/health", (401,))` with
+comment “An HTTP 401 is healthy for protected MCP resources.”
+`GET /health` 200 JSON exists only after `auth()`. Credential-free
+probes never reach it. `BLACKOUT_SENTINEL` interval is 300 seconds.
 
 ## Remaining AAX-3 work
 
-1. Privileged or mazcontrol-scoped `systemctl status` + `mysqldump --no-data`.
-2. Confirm no `ada_*` tables before any migration rehearsal (AAX-7).
-3. Identify localhost `/health` 401 caller without weakening auth (AAX-4).
+1. mazcontrol-scoped `systemctl show` + `mysqldump --no-data`.
+2. Confirm no live `ada_*` tables before any migration rehearsal (AAX-7).
+3. AAX-4 caller is identified from source; production code change is
+   optional and must not weaken auth.
 4. Diagnose unresolved `pending_external_sync` rows without mass-retry
    (AAX-5).
 5. Do not clear viewer `readOnly` to bypass the current MCP classifier.
