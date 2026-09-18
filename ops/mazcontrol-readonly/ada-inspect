@@ -1,0 +1,246 @@
+#!/bin/sh
+# ada-inspect — least-privilege Ada/control-core read helper.
+#
+# Not a scheduler. Not a shell. Not a SQL console.
+# Hardcoded verbs + paths only. Never prints env values, tokens, or row bodies.
+#
+# Intended install:
+#   /usr/local/bin/ada-inspect  (root:root, 0755)
+#   sudo -n -u mazcontrol /usr/local/bin/ada-inspect <verb>
+#
+# See docs/MAZCONTROL-READONLY.md
+
+set -eu
+
+UNITS='
+maziyar-control-core.service
+maziyar-mistral-worker.service
+maziyar-agiflow-outbox-bridge.service
+maziyar-agiflow-outbox-bridge.timer
+maziyar-mcp-self-heal.timer
+ssh-mcp-grok-temp.service
+mariadb.service
+'
+
+HASH_PATHS='
+/opt/maziyar-control-core/control_core.py
+/opt/maziyar-control-core/clickup_state_steward.py
+/opt/maziyar-control-core/tool_harvester.py
+/etc/systemd/system/maziyar-control-core.service
+/etc/systemd/system/maziyar-mistral-worker.service
+/etc/systemd/system/maziyar-agiflow-outbox-bridge.service
+/etc/systemd/system/maziyar-agiflow-outbox-bridge.timer
+'
+
+UNIT_PROPS='ActiveState,SubState,MainPID,FragmentPath,User,Group,WorkingDirectory,EnvironmentFiles,ExecStart,ExecMainStartTimestamp,NRestarts,Result,UnitFileState,Description'
+
+# Live source tables plus Ada/canary names we must confirm present or absent.
+KNOWN_TABLES='
+schema_migrations
+agent_events
+canonical_tasks
+jobs
+job_results
+schedules
+dead_letter_queue
+service_health
+operator_reachability
+operator_state
+cache_manifest
+harvest_provider_state
+tool_harvest_queue
+data_snapshots
+intelligence_findings
+forecasts
+content_gate_states
+green_buffers
+pending_external_sync
+audit_log
+pd_worker_runs
+pd_outbox
+ada_failed_runs
+ada_failed_run_events
+ada_agiflow_outbox
+ada_agiflow_task_map
+ada_agiflow_evidence
+ada_agiflow_close_grants
+ada_agiflow_projection_events
+ada_scope_versions
+ada_memory_records
+ada_context_receipts
+ada_agent_passports
+ada_mutation_journal
+'
+
+ENV_FILE='/etc/maziyar-control-core.env'
+
+die() {
+  printf 'ada-inspect: %s\n' "$*" >&2
+  exit 2
+}
+
+usage() {
+  cat <<'EOF'
+ada-inspect — Ada control-core read-only inspection
+
+verbs:
+  help              this text
+  units             systemctl show for hardcoded Ada/control-core units
+  hashes            sha256 of hardcoded source/unit files
+  tables            SHOW TABLES (names only) + ada_*/pd_* presence
+  create TABLE      SHOW CREATE TABLE for one known table name
+  columns TABLE     information_schema columns/indexes for one known table
+  schema            tables + create/columns for live source tables only
+
+Never dumps row contents. Never restarts services. Never prints secrets.
+EOF
+}
+
+in_list() {
+  needle=$1
+  hay=$2
+  printf '%s\n' "$hay" | tr -d '\r' | grep -Fxq -- "$needle"
+}
+
+require_table() {
+  t=$1
+  case "$t" in
+    *[!A-Za-z0-9_]*) die "invalid table name" ;;
+    '') die "table name required" ;;
+  esac
+  if ! in_list "$t" "$KNOWN_TABLES"; then
+    die "table not in allowlist: $t"
+  fi
+}
+
+cmd_units() {
+  printf '%s\n' "$UNITS" | tr -d '\r' | while IFS= read -r unit; do
+    [ -z "$unit" ] && continue
+    printf '## %s\n' "$unit"
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl show "$unit" --property="$UNIT_PROPS" --no-page 2>&1 || \
+        printf 'ERROR systemctl show failed for %s\n' "$unit"
+    else
+      printf 'ERROR systemctl not found\n'
+    fi
+    printf '\n'
+  done
+}
+
+cmd_hashes() {
+  printf '%s\n' "$HASH_PATHS" | tr -d '\r' | while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    if [ -e "$path" ]; then
+      sha256sum "$path" 2>&1 || printf 'ERROR sha256sum failed %s\n' "$path"
+    else
+      printf 'MISSING %s\n' "$path"
+    fi
+  done
+}
+
+load_db_env() {
+  [ -r "$ENV_FILE" ] || die "cannot read $ENV_FILE (need mazcontrol group)"
+  # Parse NAME=value without printing values. Ignore comments/blank.
+  CONTROL_DB_HOST=127.0.0.1
+  CONTROL_DB_PORT=3306
+  CONTROL_DB_USER=
+  CONTROL_DB_PASSWORD=
+  CONTROL_DB_NAME=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    name=${line%%=*}
+    val=${line#*=}
+    # strip optional surrounding quotes
+    val=${val#\"}
+    val=${val%\"}
+    val=${val#\'}
+    val=${val%\'}
+    case "$name" in
+      CONTROL_DB_HOST) CONTROL_DB_HOST=$val ;;
+      CONTROL_DB_PORT) CONTROL_DB_PORT=$val ;;
+      CONTROL_DB_USER) CONTROL_DB_USER=$val ;;
+      CONTROL_DB_PASSWORD) CONTROL_DB_PASSWORD=$val ;;
+      CONTROL_DB_NAME) CONTROL_DB_NAME=$val ;;
+    esac
+  done < "$ENV_FILE"
+  [ -n "$CONTROL_DB_USER" ] || die "CONTROL_DB_USER missing"
+  [ -n "$CONTROL_DB_NAME" ] || die "CONTROL_DB_NAME missing"
+  export MYSQL_PWD=$CONTROL_DB_PASSWORD
+}
+
+mysql_ro() {
+  # $@ is the SQL. Caller must pass only allowlisted statements.
+  mysql --batch --raw --skip-column-names \
+    --host="$CONTROL_DB_HOST" \
+    --port="$CONTROL_DB_PORT" \
+    --user="$CONTROL_DB_USER" \
+    --database="$CONTROL_DB_NAME" \
+    --connect-timeout=5 \
+    --execute="$1"
+}
+
+cmd_tables() {
+  load_db_env
+  printf '## SHOW TABLES\n'
+  mysql_ro "SHOW TABLES;"
+  printf '\n## ada_* presence\n'
+  mysql_ro "SHOW TABLES LIKE 'ada\_%';" || true
+  printf '\n## pd_* presence\n'
+  mysql_ro "SHOW TABLES LIKE 'pd\_%';" || true
+  unset MYSQL_PWD
+}
+
+cmd_create() {
+  require_table "$1"
+  load_db_env
+  mysql_ro "SHOW CREATE TABLE \`$1\`;"
+  unset MYSQL_PWD
+}
+
+cmd_columns() {
+  require_table "$1"
+  load_db_env
+  printf '## columns %s\n' "$1"
+  mysql_ro "SELECT column_name, column_type, is_nullable, column_key, extra FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='$1' ORDER BY ordinal_position;"
+  printf '\n## indexes %s\n' "$1"
+  mysql_ro "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='$1' ORDER BY index_name, seq_in_index;"
+  unset MYSQL_PWD
+}
+
+cmd_schema() {
+  load_db_env
+  printf '## SHOW TABLES\n'
+  mysql_ro "SHOW TABLES;"
+  printf '\n## ada_* presence\n'
+  mysql_ro "SHOW TABLES LIKE 'ada\_%';" || true
+  printf '\n## pd_* presence\n'
+  mysql_ro "SHOW TABLES LIKE 'pd\_%';" || true
+  printf '\n## live source tables CREATE/columns\n'
+  for t in schema_migrations agent_events canonical_tasks jobs job_results schedules dead_letter_queue service_health operator_reachability operator_state cache_manifest harvest_provider_state tool_harvest_queue data_snapshots intelligence_findings forecasts content_gate_states green_buffers pending_external_sync audit_log; do
+    printf '\n### %s\n' "$t"
+    mysql_ro "SHOW CREATE TABLE \`$t\`;" 2>/dev/null || printf '(absent)\n'
+  done
+  unset MYSQL_PWD
+}
+
+verb=${1:-help}
+arg=${2:-}
+
+case "$verb" in
+  help|-h|--help) usage ;;
+  units) cmd_units ;;
+  hashes) cmd_hashes ;;
+  tables) cmd_tables ;;
+  create)
+    [ -n "$arg" ] || die "create requires TABLE"
+    cmd_create "$arg"
+    ;;
+  columns)
+    [ -n "$arg" ] || die "columns requires TABLE"
+    cmd_columns "$arg"
+    ;;
+  schema) cmd_schema ;;
+  *) die "unknown verb: $verb (try help)" ;;
+esac

@@ -279,3 +279,64 @@ probes never reach it. `BLACKOUT_SENTINEL` interval is 300 seconds.
    (AAX-5).
 5. Do not clear viewer `readOnly` to bypass the current MCP classifier.
 
+## Session addendum 2026-09-19T23:20Z (fresh Grok account, HEAD `7953eab`)
+
+Independent fetch confirmed remote HEAD is still
+`7953eaba43bd0fe5230ae9f0b3f0370cf8a1d1ed`. No concurrent implementation
+commit. Greptile score on implementation `3513278` remains **5/5**,
+0 unresolved P0/P1. Docs-only HEAD has a Greptile check still
+`in_progress`.
+
+Ada MCP is the **Add A** connector profile `grok-ada-readonly`
+(`mistralops`, role=viewer). Roya default is Royadarman and must not
+be used as Ada.
+
+This session independently reconfirmed (no secrets):
+
+- `uname`: `Linux server.maziyarid.com 5.14.0-687.46.1.el9_8.x86_64`
+- `id`: `uid=1003(mistralops) gid=1005(mistralops)`
+- `control_core.py`: **65370 bytes / 1096 lines**, mode `0555` root:root,
+  Modify 2026-09-12 23:50:04 +0530
+- `grep ada_` / `pd_worker_runs` / `pd_outbox` on live source: no matches
+- `CREATE TABLE` list unchanged (20 tables including
+  `pending_external_sync` with `locked_by` / `lease_until`)
+- Seeded schedules re-read from source lines 428–433:
+  BLACKOUT_SENTINEL 300, PROJECT_CONTROLLER 600,
+  CLICKUP_STATE_STEWARD 600, SEO_SCOUT 3600,
+  TEMP_TOOL_HARVESTER 900, ORACLE_FORECASTER 86400
+- Unit text re-read: User/Group `mazcontrol`, Requires `mariadb.service`,
+  EnvironmentFile unread (`0640 root:mazcontrol`, 480 bytes),
+  ExecStart venv python `control_core.py serve`, `ProtectSystem=strict`,
+  `ReadWritePaths=/opt/maziyar-control-core/state`
+- Mistral worker: User `maziyarid`, ExecStart
+  `/usr/bin/node /srv/community-mcp/mistral-worker/index.mjs`,
+  drop-in ReadWritePaths for `/srv/maziyar-wp-mcp/*` plus
+  ReadOnlyPaths `/opt/maziyar-control-core`
+- Agiflow outbox bridge: oneshot root, `OnUnitActiveSec=5min`,
+  `/srv/maziyar-wp-mcp/deploy/agiflow_outbox_bridge.py handoff --limit 20`
+- `multi-user.target.wants` includes `maziyar-control-core.service`,
+  `maziyar-mistral-worker.service`, `mariadb.service`,
+  `ssh-mcp-grok-temp.service`
+- ssh-mcp Grok Ada unit is temporary (`RuntimeMaxSec=604800`) with
+  existing audit-write drop-in
+  `ReadWritePaths=/var/lib/mcpvps/.local/share/ssh-mcp`
+- `clickup_state_steward.py` / `tool_harvester.py` remain mode-denied
+- `sha256sum` / `systemctl show` / `cksum` / `openssl dgst` remain
+  POLICY_DENIED. `readOnly` stays on. `sudoers.d` is unreadable.
+
+Env **names** only (values not read). Source required names this
+session: `CONTROL_DB_HOST/PORT/USER/PASSWORD/NAME`, `CONTROL_ACTOR`,
+`CONTROL_BIND`, `CONTROL_PORT`, `CONTROL_API_TOKEN`, `MISTRAL_API_KEY`,
+`MISTRAL_API_BASE`, `MISTRAL_DEFAULT_MODEL`, `GROK_CLICKUP_USER_ID`.
+
+AAX-4 source proof reconfirmed: `HEALTH_TARGETS` control-core row
+expects 401; `CONTROL_API_TOKEN` is required at line 918.
+
+### Helper prepared, not installed
+
+Repo now contains `ops/mazcontrol-readonly/ada-inspect` plus
+`docs/MAZCONTROL-READONLY.md`. VPS install + MCP allowlist of that
+single binary is the remaining AAX-3 infrastructure step. No
+production SQL. No helper copied onto the host from this session.
+
+

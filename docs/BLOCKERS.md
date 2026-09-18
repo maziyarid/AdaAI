@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Greptile independently reviewed `3513278` at 5/5 (no outstanding P0/P1). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. AAX-4 `/health` 401 caller identified from live source (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS`). Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Greptile independently reviewed `3513278` at 5/5 (no outstanding P0/P1). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19T23:20Z. AAX-4 `/health` 401 caller identified from live source (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS`). mazcontrol read-only helper is in-repo, not installed. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 
@@ -12,10 +12,15 @@ Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Greptile i
 
 **Next privileged/mazcontrol steps (no secrets in git):**
 
-1. `mysqldump --no-data` control-core schema (table names / indexes only).
-2. `systemctl status maziyar-control-core.service` (ActiveState only).
-3. Confirm presence/absence of live MariaDB `ada_*` vs `pd_*` (source has no `ada_*` / `pd_worker_runs` / `pd_outbox` names).
-4. Optional later AAX-4 code change: add no-secrets `/livez` and point `HEALTH_TARGETS` at it. Do **not** strip `CONTROL_API_TOKEN` from `/health`.
+1. Human-install `ops/mazcontrol-readonly/ada-inspect` as
+   `/usr/local/bin/ada-inspect` and the matching sudoers snippet.
+   Allowlist that single binary on `grok-ada-readonly`. Keep `readOnly`.
+2. `ada-inspect units` (ActiveState only) and `ada-inspect hashes`.
+3. `ada-inspect tables` to confirm live `ada_*` vs `pd_*` (source has
+   no `ada_*` / `pd_worker_runs` / `pd_outbox` names).
+4. Optional later AAX-4 code change: add no-secrets `/livez` and point
+   `HEALTH_TARGETS` at it. Do **not** strip `CONTROL_API_TOKEN` from
+   `/health`.
 
 ## Blocker 2 — production canary not authorized
 

@@ -46,3 +46,24 @@ Re-add a workflow only after a minimal hosted-runner probe can actually start. A
 5. no production credentials and no production MCP mutation
 
 The absence of GitHub CI does not weaken the production gate: the VPS deployment itself must run the same tests before service installation or upgrade.
+
+## 2026-09-19T23:20Z — runner still never starts (HEAD `7953eab`)
+
+GitHub Actions workflow `.github/workflows/ada-reliability.yml` is
+`state=active`. Latest runs on this SHA:
+
+- pull_request run `35404703254` job `105791932183`
+- push run `35404699202` job `105791920594`
+
+Both `conclusion=failure` in ~2 seconds. Job JSON:
+`runner_id=0`, `runner_name=""`, `runner_group_id=0`. Log download
+returns HTTP 404. Checkout / setup-python / pytest never ran.
+
+This is hosted-runner assignment, not a failing Ada suite. Local
+clean venv on the same tree: **149 passed**, import
+`AdaEngine` / `seed_phase1` / `FailedRunOutbox` OK. Do not rewrite
+application code to satisfy a runner that never starts.
+
+`mergeable_state=unstable` on PR #2 is this Actions signal. Greptile
+5/5 on implementation `3513278` is independent of it.
+

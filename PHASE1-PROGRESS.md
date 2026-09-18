@@ -1,5 +1,27 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T23:20Z — mazcontrol helper prepared; AAX-3 AC2/AC3 still gated
+
+**Fetched HEAD:** `7953eaba43bd0fe5230ae9f0b3f0370cf8a1d1ed` (unchanged).
+Implementation parent `3513278` still Greptile **5/5**, 0 P0/P1.
+PR #2 open, `mergeable_state=unstable` because Actions `runner_id=0`.
+
+### Done this session
+- Independent Ada-readonly reconfirm (Add A profile `grok-ada-readonly`).
+- In-repo least-privilege helper `ops/mazcontrol-readonly/ada-inspect`
+  (units/hashes/schema-only). **Not installed on VPS.**
+- Local clean venv: **149 passed**. Import OK. Critical files non-empty
+  (outbox 40345 / tests 27521 / engine 71704). Zero source placeholders.
+
+### Not done
+- Helper/sudoers/MCP allowlist install (needs Maziyar).
+- Live `SHOW TABLES` / ActiveState / sha256.
+- Production SQL. Merge. Deploy.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19 — AAX-15 restore + Greptile P1s (atomic claim / no silent succeed)
 
 **Fetched HEAD:** `4caefb5970b3d6245ce11801f59b07d0df2b4584` (placeholders).
