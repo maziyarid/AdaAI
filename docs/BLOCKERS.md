@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward in-repo. HMAC-issued Agiflow evidence (Greptile P1). Production import and canary not executed.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Production SQL not applied. Live VPS canaries are not this session.**
 
 ## Blocker 1 — no SSH/SentinelX from this Grok session
 
@@ -34,10 +34,11 @@ Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushe
 
 ## Non-blockers (done)
 
-- Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied. Includes `005_ada_agiflow_projection.sql` (task map, outbox, HMAC evidence, close grants, events).
+- Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied. Includes `005_ada_agiflow_projection.sql` and `006_ada_failed_run_outbox.sql`.
 - `path_hash` uniqueness and one-ACTIVE release constraint in SQL.
 - Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
 - HMAC receipts carry `signature_alg` + `key_id`.
 - Fail-closed authorize / approvals / journal / ZWNJ / shadow mode.
 - AAX-12 in-repo Agiflow steward: mapping, HMAC-issued Review evidence, one-time human Done grant, human-edit conflict, outbox replay of ids only, no runtime writes, no ClickUp dependency. Caller-constructed evidence is rejected (`UNKNOWN_EVIDENCE`).
+- AAX-15 in-repo failed-run outbox (distinct from AAX-12 projection outbox): parked vs retryable vs inflight vs dead-letter, `replay=UNAVAILABLE` when persist fails, Agiflow handoff through the steward, no WordPress/packet mutation from the outbox itself. In-process restart simulation is not VPS persistence.
 - Engine + steward pytest green from the working tree.

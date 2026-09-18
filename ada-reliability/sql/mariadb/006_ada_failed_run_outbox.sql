@@ -1,0 +1,53 @@
+-- Additive failed-run outbox (AAX-15). Execution recovery, NOT Agiflow projection.
+-- DISTINCT from ada_agiflow_outbox (AAX-12 / 005_ada_agiflow_projection.sql).
+-- Does not create jobs, schedules or leases. Not a second scheduler.
+-- Do not apply to production without the migration runbook and approval.
+--
+-- Live VPS currently records some of this in pd_worker_runs / pd_outbox.
+-- Reconcile names at AAX-7 apply time. Do not run two runtime outboxes.
+
+CREATE TABLE IF NOT EXISTS ada_failed_runs (
+  id CHAR(36) NOT NULL,
+  idempotency_key CHAR(64) NOT NULL,
+  run_id VARCHAR(191) NOT NULL,
+  worker VARCHAR(128) NOT NULL,
+  schedule_id VARCHAR(191) NULL,
+  durable_job_id VARCHAR(191) NULL,
+  factory_task_id VARCHAR(191) NULL,
+  packet_id VARCHAR(191) NULL,
+  artifact_id VARCHAR(191) NULL,
+  failure_class VARCHAR(64) NOT NULL,
+  failure_reason TEXT NOT NULL,
+  lifecycle VARCHAR(32) NOT NULL,
+  attempt_count INT NOT NULL DEFAULT 0,
+  max_attempts INT NOT NULL DEFAULT 5,
+  first_failed_at TIMESTAMP(6) NOT NULL,
+  last_failed_at TIMESTAMP(6) NOT NULL,
+  next_retry_at TIMESTAMP(6) NULL,
+  reset_condition VARCHAR(255) NULL,
+  external_sync_state VARCHAR(32) NOT NULL DEFAULT 'none',
+  mutation_kind VARCHAR(64) NOT NULL DEFAULT 'none',
+  mutation_idempotency_key CHAR(64) NULL,
+  sync_marker VARCHAR(96) NOT NULL,
+  payload JSON NOT NULL,
+  last_error TEXT NULL,
+  lease_owner VARCHAR(128) NULL,
+  lease_until TIMESTAMP(6) NULL,
+  created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ada_failed_runs_idem (idempotency_key),
+  KEY idx_ada_failed_runs_claim (lifecycle, next_retry_at),
+  KEY idx_ada_failed_runs_job (durable_job_id),
+  KEY idx_ada_failed_runs_run (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ada_failed_run_events (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  failed_run_id CHAR(36) NOT NULL,
+  event_type VARCHAR(64) NOT NULL,
+  details JSON NOT NULL,
+  created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id),
+  KEY idx_ada_failed_run_events (failed_run_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

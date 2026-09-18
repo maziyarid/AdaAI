@@ -25,6 +25,8 @@ mysql --defaults-file=/etc/ada/mysql.cnf control_core \
   < /srv/ada/ada-reliability/sql/mariadb/004_ada_qalam_eval.sql
 mysql --defaults-file=/etc/ada/mysql.cnf control_core \
   < /srv/ada/ada-reliability/sql/mariadb/005_ada_agiflow_projection.sql
+mysql --defaults-file=/etc/ada/mysql.cnf control_core \
+  < /srv/ada/ada-reliability/sql/mariadb/006_ada_failed_run_outbox.sql
 ```
 
 Do not restart WordPress MCP, OAuth gateway, GSC MCP, or unrelated units.

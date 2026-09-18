@@ -7,6 +7,7 @@ from .agiflow_steward import (
     IssuedEvidence,
     ReadOnlyRuntime,
 )
+from .failed_run_outbox import FailedRunOutbox, RunStatus
 from .engine import AdaEngine, AdaError, seed_phase1
 from .mutations import apply_authorized_mutation, journal_intent
 
@@ -18,6 +19,8 @@ __all__ = [
     "FakeAgiflow",
     "IssuedEvidence",
     "ReadOnlyRuntime",
+    "FailedRunOutbox",
+    "RunStatus",
     "seed_phase1",
     "journal_intent",
     "apply_authorized_mutation",

@@ -46,3 +46,17 @@ def test_agiflow_evidence_and_close_grants_are_hmac_issued():
     assert "evidence_id CHAR(36) NOT NULL" in text
     # Outbox must not become a second forgeable evidence store.
     assert "Payload stores evidence_id / close_grant_id only" in text
+
+
+def test_failed_run_outbox_is_distinct_from_agiflow_projection():
+    text = (SQL / "006_ada_failed_run_outbox.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS ada_failed_runs" in text
+    assert "CREATE TABLE IF NOT EXISTS ada_failed_run_events" in text
+    assert "UNIQUE KEY uq_ada_failed_runs_idem (idempotency_key)" in text
+    assert "DISTINCT from ada_agiflow_outbox" in text
+    assert "DROP TABLE" not in text
+    assert "CREATE TABLE IF NOT EXISTS jobs" not in text
+    assert "CREATE TABLE IF NOT EXISTS schedules" not in text
+    assert "CREATE TABLE IF NOT EXISTS ada_agiflow_outbox" not in text
+    agiflow = (SQL / "005_ada_agiflow_projection.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS ada_failed_runs" not in agiflow

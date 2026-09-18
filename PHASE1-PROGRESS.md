@@ -1,6 +1,36 @@
 # Phase 1 reliability progress log
 
+## 2026-09-18 — AAX-15 in-repo failed-run outbox (distinct from AAX-12)
+
+**Session:** continue Phase 1 from fetched HEAD `1eabaad`. Greptile on that SHA: 5/5, 0 blocking issues. PR #2: 32 review threads, 0 unresolved.
+
+### Done this session
+- Added `ada_reliability.failed_run_outbox` as **execution recovery**, not Agiflow projection.
+  Distinct from `ada_agiflow_outbox` (AAX-12).
+- Lifecycle: queued / retryable / inflight / parked / succeeded / dead_letter / quarantined.
+- `FACTORY_PACKET_MISSING`, packet-pipeline and exit 137/SIGKILL park with reset conditions and do not hot-loop.
+- Workers report `replay=queued|parked|retryable` only after persist; otherwise `replay=UNAVAILABLE`.
+- Replay is bounded, ordered by `first_failed_at`, lease-aware, idempotent. WordPress/packet mutations are not applied by this module; duplicates skip via a mutation ledger. Agiflow catch-up goes through AAX-12 `project(evidence_id=...)`.
+- Additive SQL `006_ada_failed_run_outbox.sql` (`ada_failed_runs`, `ada_failed_run_events`). Not applied.
+- In-process dump/load simulates process restart. This is **not** VPS MariaDB persistence.
+
+### Not claimed
+- Live schema on control-core MariaDB.
+- Live worker restart survival.
+- Live scheduled-failure accumulation / replay canary.
+- ChatGPT's VPS `pd_worker_runs` / `pd_outbox` work is recorded on AAX-15; this session did not re-verify the host.
+
+### Still blocked
+1. No SSH/SentinelX this session → AAX-3 live control-core import.
+2. Production SQL not applied (AAX-7). Reconcile `ada_failed_runs` with live `pd_*` before apply.
+3. Live Teznevise canary not authorized (AAX-8).
+4. AAX-12 AC5 live board canary still needs VPS.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
 ## 2026-09-18 — AAX-12 Greptile P1: HMAC-issued evidence (not caller-constructed)
+
 
 **Session:** continue Phase 1. Greptile on `cb0b1b7` scored 3/5: Review/Done could be projected from a caller-built `ProjectionEvidence(verified=True, ...)`. Valid. Did not dismiss.
 

@@ -44,7 +44,7 @@ The current production host is about 4 vCPU / 3.6 GiB RAM with no NVIDIA GPU run
 
 ## Repository layout
 
-- `ada-reliability/` — Phase-1 executable contract (bootstrap, receipts, authorize, approvals, journal, ZWNJ validator, Mistral shadow, Agiflow projection steward). Tests do not require MariaDB.
+- `ada-reliability/` — Phase-1 executable contract (bootstrap, receipts, authorize, approvals, journal, ZWNJ validator, Mistral shadow, Agiflow projection steward, failed-run outbox). Tests do not require MariaDB.
 - `ada-reliability/sql/mariadb/` — additive `ada_*` tables for the live MariaDB instance.
 - `runtime/control-core-baseline/` — client adapter + captured behavior. Live `/opt/maziyar-control-core` import is blocked until VPS access.
 - `skills/qalam/` — versioned writing registry (router, fa-IR overlays, Teznevise ZWNJ).
