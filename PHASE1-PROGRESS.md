@@ -23,6 +23,12 @@ broken package import plus the three original outbox P1s.
 - Live VPS re-canary. ChatGPT AAX-12/AAX-15 live ACs stay checked; this is repository proof only.
 - Production SQL. Merge of PR #2 as deployed.
 
+### Phase B (same session, read-only)
+VPS MCP is configured. Ada control-core was **not** imported:
+- Content `grok-royadarman` connected, but `/opt/maziyar-control-core` is absent (Royadarman host).
+- Eqialise `grok-ada-readonly` disconnected (HTTP 502 / timeout). AAX-3 stays Blocked.
+See `docs/BLOCKERS.md`.
+
 ### Rule
 Models propose. Deterministic code authorizes. Independent validators prove the live result.
 

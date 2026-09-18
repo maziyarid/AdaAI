@@ -1,20 +1,26 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Production SQL not applied. Live VPS canaries are not this session.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (P1s restored at `39835da`). Production SQL not applied. Live control-core import still blocked this session.**
 
-## Blocker 1 — no SSH/SentinelX from this Grok session
+## Blocker 1 — Ada-readonly VPS SSH profile is down (updated 2026-09-19)
 
-**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture, production shadow wrap (AAX-3), live Agiflow board canary (AAX-12 last AC).
+**Affected:** freeze/import of `/opt/maziyar-control-core`, live MariaDB schema capture, systemd unit dump, env-name capture (AAX-3), `/health` 401 probe source (AAX-4), live `pd_*` vs `ada_*` reconciliation (AAX-7).
 
-**Evidence:** this session has GitHub and Agiflow connectors, not SSH. A PR comment claims VPS access exists for some agents; that is not the same as this session having a live shell on the host. Do not treat the old "no VPS anywhere" sentence as current, and do not treat this session as having imported the control core.
+**This session did have VPS MCP connectors.** That is not the same as a live shell on the control-core host.
 
-**Safest next step:** from an authorized VPS session (AAX-3):
+**Evidence this session (read-only, no secrets):**
+- `Content` profile `grok-royadarman` is **connected**. `/opt` on that host is `cpanel`, `royadarman-admin-mcp`, `sentinelx-cloud-core`. `/opt/maziyar-control-core` **does not exist** there (`ls` exit 2). `/srv` is `community-mcp`. This is the Royadarman/content host, not Ada control-core.
+- `Eqialise` profile `grok-ada-readonly` (`mistralops@127.0.0.1:22`, role=viewer) is **disconnected**. `read-command` returned nginx HTTP 502; `run-command ls /opt` timed out; no sessions. This is the intended Ada host.
+- Do not treat the connected Content host as the control-core baseline. Do not rewrite history as “VPS was always unavailable”; MCP is configured, Ada SSH is not usable right now.
 
-1. `tar` `/opt/maziyar-control-core` excluding `.env` / secrets.
-2. `mysqldump --no-data` the control-core schema.
-3. `systemctl cat maziyar-control-core.service maziyar-mistral-worker.service`.
+**Safest next step:** restore `grok-ada-readonly` SSH, then from that viewer profile only:
+
+1. `ls` / `find` `/opt/maziyar-control-core` excluding `.env` / secrets.
+2. `mysqldump --no-data` the control-core schema (table names / indexes only).
+3. `systemctl cat maziyar-control-core.service` (and Mistral worker unit).
 4. List environment **names** only.
-5. Commit under `runtime/control-core-baseline/imported/` on this branch.
+5. Confirm presence/absence of `ada_*` vs live `pd_worker_runs` / `pd_outbox`.
+6. Identify the localhost `/health` 401 caller (AAX-4) without weakening auth.
 
 ## Blocker 2 — production canary not authorized
 
