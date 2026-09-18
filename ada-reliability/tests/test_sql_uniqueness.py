@@ -32,3 +32,17 @@ def test_agiflow_outbox_is_idempotent_and_additive():
     # Must not claim ownership of control-core jobs/schedules.
     assert "CREATE TABLE IF NOT EXISTS jobs" not in text
     assert "CREATE TABLE IF NOT EXISTS schedules" not in text
+
+
+def test_agiflow_evidence_and_close_grants_are_hmac_issued():
+    """Greptile P1: Review/Done proof lives in HMAC tables, not caller flags."""
+    text = (SQL / "005_ada_agiflow_projection.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS ada_agiflow_evidence" in text
+    assert "CREATE TABLE IF NOT EXISTS ada_agiflow_close_grants" in text
+    assert "signature CHAR(64) NOT NULL" in text
+    assert "consumed TINYINT(1) NOT NULL DEFAULT 0" in text
+    assert "verifier_identity VARCHAR(128) NOT NULL" in text
+    assert "closer_identity VARCHAR(128) NOT NULL" in text
+    assert "evidence_id CHAR(36) NOT NULL" in text
+    # Outbox must not become a second forgeable evidence store.
+    assert "Payload stores evidence_id / close_grant_id only" in text

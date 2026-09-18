@@ -2,6 +2,8 @@
 from ada_reliability import (
     AdaEngine,
     AgiflowStateSteward,
+    CloseGrant,
+    IssuedEvidence,
     apply_authorized_mutation,
     journal_intent,
     seed_phase1,
@@ -16,3 +18,5 @@ def test_public_api_imports():
     assert callable(apply_authorized_mutation)
     assert callable(require_authorized_journal)
     assert callable(AgiflowStateSteward)
+    assert IssuedEvidence is not None
+    assert CloseGrant is not None

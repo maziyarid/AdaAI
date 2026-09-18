@@ -8,7 +8,7 @@ onto Agiflow. It must never:
 - treat Agiflow remote execution as the scheduler;
 - require ClickUp for new execution or completion;
 - overwrite a newer human Agiflow edit;
-- project Done/Review from a model assertion without live evidence.
+- project Done/Review from a model assertion or caller-constructed evidence.
 
 HMAC receipts and WordPress mutation stay in AdaEngine. This module is a
 side-channel projection with a durable outbox so an Agiflow outage does not
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from .crypto import sha256_obj, utcnow
+from .crypto import hmac_sign, hmac_verify, sha256_obj, utcnow
 from .engine import AdaError
 
 
@@ -43,7 +43,7 @@ RUNTIME_TO_AGIFLOW = {
     "leased": AGIFLOW_IN_PROGRESS,
     "running": AGIFLOW_IN_PROGRESS,
     "executing": AGIFLOW_IN_PROGRESS,
-    "succeeded": AGIFLOW_REVIEW,  # only if evidence is verified
+    "succeeded": AGIFLOW_REVIEW,  # only if issued evidence is verified
     "failed": AGIFLOW_BLOCKED,
     "dead_letter": AGIFLOW_BLOCKED,
     "parked": AGIFLOW_BLOCKED,
@@ -62,6 +62,9 @@ RUNTIME_WRITE_METHODS = (
 )
 
 AGIFLOW_EXECUTE_METHODS = ("execute", "run_task", "dispatch")
+TRUSTED_SOURCES = frozenset({"runtime", "live"})
+DEFAULT_TRUSTED_VERIFIERS = frozenset({"verifier", "ada_service"})
+DEFAULT_TRUSTED_CLOSERS = frozenset({"human_approver"})
 
 
 def _now(clock: Optional[Callable[[], datetime]]) -> datetime:
@@ -198,28 +201,28 @@ class FakeAgiflow:
 
 
 # ---------------------------------------------------------------------------
-# Evidence required before Review/Done
+# Issued evidence — callers cannot construct a Review/Done proof
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ProjectionEvidence:
-    verified: bool
+@dataclass(frozen=True)
+class IssuedEvidence:
+    """Handle returned by issue_evidence. Fields are informational; projection
+    looks up the HMAC-signed record by id and rejects anything not in store."""
+    id: str
+    durable_job_id: str
     live_hash: str
     verifier_identity: str
-    source: str = "runtime"
-    allow_done: bool = False
-    closer_identity: Optional[str] = None
+    source: str
+    signature: str
 
-    def is_live_proof(self) -> bool:
-        if not self.verified:
-            return False
-        if not self.live_hash:
-            return False
-        if self.verifier_identity in ("model_proposer", "model", None, ""):
-            return False
-        if self.source in ("model_assertion", "chat", "xmemo"):
-            return False
-        return True
+
+@dataclass(frozen=True)
+class CloseGrant:
+    id: str
+    durable_job_id: str
+    evidence_id: str
+    closer_identity: str
+    signature: str
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +248,21 @@ class AgiflowStateSteward:
         agiflow: FakeAgiflow,
         runtime: ReadOnlyRuntime,
         project_id: str,
+        hmac_key: str,
         clock: Optional[Callable[[], datetime]] = None,
         clickup: Any = None,
+        trusted_verifiers: Optional[frozenset[str]] = None,
+        trusted_closers: Optional[frozenset[str]] = None,
     ):
+        if len(hmac_key) < 32:
+            raise RuntimeError("HMAC key too short")
         self.agiflow = agiflow
         self.runtime = runtime
         self.project_id = project_id
+        self.hmac_key = hmac_key
         self._clock = clock
+        self.trusted_verifiers = trusted_verifiers or DEFAULT_TRUSTED_VERIFIERS
+        self.trusted_closers = trusted_closers or DEFAULT_TRUSTED_CLOSERS
         # ClickUp is legacy. The constructor accepts a spy so tests can prove
         # it is never invoked; the steward stores nothing usable.
         self._clickup_ignored = clickup is not None
@@ -259,9 +270,149 @@ class AgiflowStateSteward:
         self.mappings: dict[str, Mapping] = {}
         self.outbox: dict[str, dict] = {}
         self.audit: list[dict] = []
+        self.issued_evidence: dict[str, dict] = {}
+        self.close_grants: dict[str, dict] = {}
 
     def now(self) -> datetime:
         return _now(self._clock)
+
+    # -- issued evidence / close grants ------------------------------------
+
+    def issue_evidence(
+        self,
+        *,
+        durable_job_id: str,
+        live_hash: str,
+        verifier_identity: str,
+        source: str = "runtime",
+    ) -> IssuedEvidence:
+        if self.runtime.get_job(durable_job_id) is None:
+            raise AdaError("UNKNOWN_RUNTIME_JOB", durable_job_id)
+        if verifier_identity not in self.trusted_verifiers:
+            raise AdaError("UNTRUSTED_VERIFIER", verifier_identity)
+        if source not in TRUSTED_SOURCES:
+            raise AdaError("UNTRUSTED_EVIDENCE_SOURCE", source)
+        if not live_hash:
+            raise AdaError("MISSING_LIVE_HASH", durable_job_id)
+        payload = {
+            "durable_job_id": durable_job_id,
+            "live_hash": live_hash,
+            "verifier_identity": verifier_identity,
+            "source": source,
+        }
+        rec_id = str(uuid.uuid4())
+        signature = hmac_sign(payload, self.hmac_key)
+        stored = {
+            **payload,
+            "id": rec_id,
+            "signature": signature,
+            "issued_at": self.now().isoformat(),
+        }
+        self.issued_evidence[rec_id] = stored
+        self._audit("evidence_issued", durable_job_id, {"evidence_id": rec_id})
+        return IssuedEvidence(
+            id=rec_id,
+            durable_job_id=durable_job_id,
+            live_hash=live_hash,
+            verifier_identity=verifier_identity,
+            source=source,
+            signature=signature,
+        )
+
+    def issue_close_grant(
+        self,
+        *,
+        durable_job_id: str,
+        evidence_id: str,
+        closer_identity: str,
+    ) -> CloseGrant:
+        if closer_identity not in self.trusted_closers:
+            raise AdaError("UNTRUSTED_CLOSER", closer_identity)
+        evidence = self._require_issued_evidence(evidence_id, durable_job_id)
+        payload = {
+            "durable_job_id": durable_job_id,
+            "evidence_id": evidence.id,
+            "closer_identity": closer_identity,
+        }
+        rec_id = str(uuid.uuid4())
+        signature = hmac_sign(payload, self.hmac_key)
+        stored = {
+            **payload,
+            "id": rec_id,
+            "signature": signature,
+            "consumed": False,
+            "issued_at": self.now().isoformat(),
+        }
+        self.close_grants[rec_id] = stored
+        self._audit("close_grant_issued", durable_job_id, {"grant_id": rec_id})
+        return CloseGrant(
+            id=rec_id,
+            durable_job_id=durable_job_id,
+            evidence_id=evidence.id,
+            closer_identity=closer_identity,
+            signature=signature,
+        )
+
+    def _require_issued_evidence(self, evidence_id: str, durable_job_id: str) -> IssuedEvidence:
+        stored = self.issued_evidence.get(evidence_id)
+        if stored is None:
+            raise AdaError("UNKNOWN_EVIDENCE", evidence_id)
+        payload = {
+            "durable_job_id": stored["durable_job_id"],
+            "live_hash": stored["live_hash"],
+            "verifier_identity": stored["verifier_identity"],
+            "source": stored["source"],
+        }
+        if not hmac_verify(payload, stored["signature"], self.hmac_key):
+            raise AdaError("FORGED_EVIDENCE", evidence_id)
+        if stored["durable_job_id"] != durable_job_id:
+            raise AdaError("EVIDENCE_JOB_MISMATCH", evidence_id)
+        if stored["verifier_identity"] not in self.trusted_verifiers:
+            raise AdaError("UNTRUSTED_VERIFIER", stored["verifier_identity"])
+        if stored["source"] not in TRUSTED_SOURCES:
+            raise AdaError("UNTRUSTED_EVIDENCE_SOURCE", stored["source"])
+        return IssuedEvidence(
+            id=stored["id"],
+            durable_job_id=stored["durable_job_id"],
+            live_hash=stored["live_hash"],
+            verifier_identity=stored["verifier_identity"],
+            source=stored["source"],
+            signature=stored["signature"],
+        )
+
+    def _require_close_grant(
+        self, grant_id: str, durable_job_id: str, evidence: IssuedEvidence,
+    ) -> CloseGrant:
+        stored = self.close_grants.get(grant_id)
+        if stored is None:
+            raise AdaError("UNKNOWN_CLOSE_GRANT", grant_id)
+        payload = {
+            "durable_job_id": stored["durable_job_id"],
+            "evidence_id": stored["evidence_id"],
+            "closer_identity": stored["closer_identity"],
+        }
+        if not hmac_verify(payload, stored["signature"], self.hmac_key):
+            raise AdaError("FORGED_CLOSE_GRANT", grant_id)
+        if stored["consumed"]:
+            raise AdaError("CLOSE_GRANT_CONSUMED", grant_id)
+        if stored["durable_job_id"] != durable_job_id:
+            raise AdaError("CLOSE_GRANT_JOB_MISMATCH", grant_id)
+        if stored["evidence_id"] != evidence.id:
+            raise AdaError("CLOSE_GRANT_EVIDENCE_MISMATCH", grant_id)
+        if stored["closer_identity"] not in self.trusted_closers:
+            raise AdaError("UNTRUSTED_CLOSER", stored["closer_identity"])
+        return CloseGrant(
+            id=stored["id"],
+            durable_job_id=stored["durable_job_id"],
+            evidence_id=stored["evidence_id"],
+            closer_identity=stored["closer_identity"],
+            signature=stored["signature"],
+        )
+
+    def _consume_close_grant(self, grant_id: str) -> None:
+        rec = self.close_grants.get(grant_id)
+        if rec is not None:
+            rec["consumed"] = True
 
     # -- mapping ------------------------------------------------------------
 
@@ -273,7 +424,7 @@ class AgiflowStateSteward:
         if existing is not None:
             return {"status": "existing", "mapping": existing, "created": False}
         job = self.runtime.get_job(durable_job_id)
-        desired = AGIFLOW_TODO if job is None else self._desired_status(job, evidence=None)
+        desired = AGIFLOW_TODO if job is None else self._desired_status(job, evidence=None, grant=None)
         try:
             task = self.agiflow.create_task(
                 project_id=self.project_id, title=title, status=desired,
@@ -300,31 +451,47 @@ class AgiflowStateSteward:
 
     # -- projection ---------------------------------------------------------
 
-    def project(self, durable_job_id: str, *, evidence: Optional[ProjectionEvidence] = None) -> dict:
+    def project(
+        self,
+        durable_job_id: str,
+        *,
+        evidence_id: Optional[str] = None,
+        close_grant_id: Optional[str] = None,
+    ) -> dict:
         job = self.runtime.get_job(durable_job_id)
         if job is None:
             raise AdaError("UNKNOWN_RUNTIME_JOB", durable_job_id)
+        evidence = (
+            self._require_issued_evidence(evidence_id, durable_job_id)
+            if evidence_id else None
+        )
+        if close_grant_id and evidence is None:
+            raise AdaError("CLOSE_GRANT_REQUIRES_EVIDENCE", close_grant_id)
+        grant = (
+            self._require_close_grant(close_grant_id, durable_job_id, evidence)
+            if close_grant_id else None
+        )
         title = job.get("title") or durable_job_id
         ensured = self.ensure_mapping(durable_job_id, title)
         if ensured.get("status") == "PENDING_SYNC":
-            # Also park the status/comment so replay is complete.
             self._enqueue_outbox(
                 kind="project",
                 durable_job_id=durable_job_id,
-                payload={"evidence": self._evidence_payload(evidence)},
+                payload={"evidence_id": evidence_id, "close_grant_id": close_grant_id},
             )
             return {"status": "PENDING_SYNC", "reason": "agiflow_unavailable"}
 
         mapping = self.mappings[durable_job_id]
-        return self._project_mapped(mapping, job, evidence)
+        return self._project_mapped(mapping, job, evidence, grant)
 
     def _project_mapped(
         self,
         mapping: Mapping,
         job: dict,
-        evidence: Optional[ProjectionEvidence],
+        evidence: Optional[IssuedEvidence],
+        grant: Optional[CloseGrant],
     ) -> dict:
-        desired = self._desired_status(job, evidence)
+        desired = self._desired_status(job, evidence, grant)
         comment_kind, comment_body = self._comment_for(job, evidence, desired)
         idem_key = self._comment_key(mapping.durable_job_id, comment_kind, evidence)
 
@@ -335,7 +502,10 @@ class AgiflowStateSteward:
                 self._enqueue_outbox(
                     kind="project",
                     durable_job_id=mapping.durable_job_id,
-                    payload={"evidence": self._evidence_payload(evidence)},
+                    payload={
+                        "evidence_id": evidence.id if evidence else None,
+                        "close_grant_id": grant.id if grant else None,
+                    },
                 )
                 return {"status": "PENDING_SYNC", "reason": "agiflow_unavailable"}
             raise
@@ -373,6 +543,8 @@ class AgiflowStateSteward:
             mapping.agiflow_task_id, comment_body, idempotency_key=idem_key,
         )
         actions.append("comment")
+        if desired == AGIFLOW_DONE and grant is not None:
+            self._consume_close_grant(grant.id)
         self._audit("projected", mapping.durable_job_id, {
             "desired": desired,
             "actions": actions,
@@ -386,12 +558,17 @@ class AgiflowStateSteward:
             "comment_id": comment["id"],
         }
 
-    def _desired_status(self, job: dict, evidence: Optional[ProjectionEvidence]) -> str:
+    def _desired_status(
+        self,
+        job: dict,
+        evidence: Optional[IssuedEvidence],
+        grant: Optional[CloseGrant],
+    ) -> str:
         runtime_state = str(job.get("state") or "queued").lower()
         if runtime_state in ("succeeded", "success", "completed"):
-            if evidence is None or not evidence.is_live_proof():
+            if evidence is None:
                 return AGIFLOW_IN_PROGRESS
-            if evidence.allow_done and evidence.closer_identity == "human_approver":
+            if grant is not None:
                 return AGIFLOW_DONE
             return AGIFLOW_REVIEW
         return RUNTIME_TO_AGIFLOW.get(runtime_state, AGIFLOW_TODO)
@@ -399,7 +576,7 @@ class AgiflowStateSteward:
     def _comment_for(
         self,
         job: dict,
-        evidence: Optional[ProjectionEvidence],
+        evidence: Optional[IssuedEvidence],
         desired: str,
     ) -> tuple[str, str]:
         state = str(job.get("state") or "queued")
@@ -409,7 +586,8 @@ class AgiflowStateSteward:
             body = (
                 f"Runtime job {job_id} succeeded with independent verification "
                 f"live_hash={evidence.live_hash if evidence else ''} "
-                f"verifier={evidence.verifier_identity if evidence else ''}."
+                f"verifier={evidence.verifier_identity if evidence else ''} "
+                f"evidence_id={evidence.id if evidence else ''}."
             )
         elif desired == AGIFLOW_DONE:
             kind = "verified_done"
@@ -435,13 +613,13 @@ class AgiflowStateSteward:
         self,
         durable_job_id: str,
         kind: str,
-        evidence: Optional[ProjectionEvidence],
+        evidence: Optional[IssuedEvidence],
     ) -> str:
         return sha256_obj({
             "job": durable_job_id,
             "kind": kind,
+            "evidence_id": evidence.id if evidence else "",
             "live_hash": evidence.live_hash if evidence else "",
-            "verified": bool(evidence and evidence.verified),
         })
 
     def _human_conflict(self, mapping: Mapping, remote: dict) -> bool:
@@ -452,7 +630,6 @@ class AgiflowStateSteward:
             return False
         if remote.get("status") in HUMAN_PROTECTED_STATUSES:
             return True
-        # Any newer human edit is preserved; steward does not clobber it.
         return True
 
     # -- outbox / replay ----------------------------------------------------
@@ -526,33 +703,12 @@ class AgiflowStateSteward:
         if kind == "create_task":
             return self.ensure_mapping(job_id, payload.get("title") or job_id)
         if kind == "project":
-            evidence = self._evidence_from_payload(payload.get("evidence"))
-            return self.project(job_id, evidence=evidence)
+            return self.project(
+                job_id,
+                evidence_id=payload.get("evidence_id"),
+                close_grant_id=payload.get("close_grant_id"),
+            )
         raise AdaError("UNKNOWN_OUTBOX_KIND", kind)
-
-    def _evidence_payload(self, evidence: Optional[ProjectionEvidence]) -> Optional[dict]:
-        if evidence is None:
-            return None
-        return {
-            "verified": evidence.verified,
-            "live_hash": evidence.live_hash,
-            "verifier_identity": evidence.verifier_identity,
-            "source": evidence.source,
-            "allow_done": evidence.allow_done,
-            "closer_identity": evidence.closer_identity,
-        }
-
-    def _evidence_from_payload(self, payload: Optional[dict]) -> Optional[ProjectionEvidence]:
-        if not payload:
-            return None
-        return ProjectionEvidence(
-            verified=bool(payload.get("verified")),
-            live_hash=str(payload.get("live_hash") or ""),
-            verifier_identity=str(payload.get("verifier_identity") or ""),
-            source=str(payload.get("source") or "runtime"),
-            allow_done=bool(payload.get("allow_done")),
-            closer_identity=payload.get("closer_identity"),
-        )
 
     # -- rollback of last steward status (not of runtime jobs) --------------
 

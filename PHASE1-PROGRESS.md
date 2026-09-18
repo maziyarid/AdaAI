@@ -1,5 +1,27 @@
 # Phase 1 reliability progress log
 
+## 2026-09-18 — AAX-12 Greptile P1: HMAC-issued evidence (not caller-constructed)
+
+**Session:** continue Phase 1. Greptile on `cb0b1b7` scored 3/5: Review/Done could be projected from a caller-built `ProjectionEvidence(verified=True, ...)`. Valid. Did not dismiss.
+
+### Done this session
+- Removed `ProjectionEvidence`. Review requires `issue_evidence` from a trusted verifier (`verifier`, `ada_service`) and trusted source (`runtime`/`live`). HMAC-SHA256 over `{durable_job_id, live_hash, verifier_identity, source}`.
+- Done additionally requires a one-time `issue_close_grant` from `human_approver`, HMAC-bound to job+evidence, consumed after successful Done.
+- `project()` takes `evidence_id` / `close_grant_id` only. Unknown, job-mismatched, or tampered HMAC records fail closed (`UNKNOWN_EVIDENCE`, `FORGED_EVIDENCE`, `CLOSE_GRANT_CONSUMED`, …).
+- Caller-constructed `IssuedEvidence` / `CloseGrant` dataclasses are handles, not proofs: store lookup fails.
+- Outbox payload is `{evidence_id, close_grant_id}` — no forgeable `verified` / identity fields.
+- Additive SQL: `ada_agiflow_evidence`, `ada_agiflow_close_grants`. Not applied.
+- ADR-0003 item 7 updated. Package no longer exports `ProjectionEvidence`.
+
+### Still blocked
+1. No SSH/SentinelX this session → AAX-3 live control-core import.
+2. Production SQL not applied (AAX-7).
+3. Live Teznevise canary not authorized (AAX-8).
+4. Live durable-job → Agiflow board canary (AAX-12 last AC) needs VPS.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
 ## 2026-09-18 — AAX-12 Agiflow state steward (in-repo, no VPS)
 
 **Session:** continue Phase 1 after AAX-2 Review at `16b78c9`. Greptile on that SHA: merge-safe, 5/5, 0 blocking issues.

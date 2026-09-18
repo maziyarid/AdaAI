@@ -33,7 +33,7 @@ AAX-12 implements an `AGIFLOW_STATE_STEWARD` / projection bridge with these cons
 4. It uses stable mappings between durable job/task IDs and Agiflow project/task IDs.
 5. If Agiflow is unavailable, authorised runtime work may continue. A durable `pending_external_sync`/outbox record may preserve the projection attempt for later idempotent replay.
 6. Replay must not duplicate comments, tasks or transitions.
-7. Completion projected to Agiflow must be backed by live/runtime evidence; a model assertion is insufficient.
+7. Completion projected to Agiflow must be backed by HMAC-issued live/runtime evidence from a trusted verifier registry. Caller-constructed evidence objects are not proof. Done additionally requires a one-time HMAC close grant from a trusted closer. Outbox replay stores `evidence_id` / `close_grant_id` only.
 8. Agiflow remote-execution allowance is not the normal runtime. Normal execution remains on Maziyar's VPS/control plane.
 
 ## ClickUp transition

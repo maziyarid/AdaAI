@@ -11,35 +11,41 @@ from ada_reliability.agiflow_steward import (
     AGIFLOW_REVIEW,
     AGIFLOW_TODO,
     AgiflowStateSteward,
+    CloseGrant,
     FakeAgiflow,
-    ProjectionEvidence,
+    IssuedEvidence,
     ReadOnlyRuntime,
 )
 from ada_reliability.engine import AdaError
+
+HMAC_KEY = "phase1-agiflow-steward-hmac-key-32b"
 
 
 def _job(job_id: str, state: str, title: str = "Teznevise metadata") -> dict:
     return {"id": job_id, "state": state, "title": title, "site_id": "teznevise.ir"}
 
 
-def _evidence(**kwargs) -> ProjectionEvidence:
+def _steward(jobs: dict[str, dict] | None = None) -> tuple[AgiflowStateSteward, FakeAgiflow, ReadOnlyRuntime]:
+    runtime = ReadOnlyRuntime(jobs or {})
+    agiflow = FakeAgiflow()
+    steward = AgiflowStateSteward(
+        agiflow=agiflow,
+        runtime=runtime,
+        project_id="other-projects-infrastructure",
+        hmac_key=HMAC_KEY,
+    )
+    return steward, agiflow, runtime
+
+
+def _issue(steward: AgiflowStateSteward, job_id: str, **kwargs) -> IssuedEvidence:
     defaults = dict(
-        verified=True,
+        durable_job_id=job_id,
         live_hash="abc123live",
         verifier_identity="verifier",
         source="runtime",
     )
     defaults.update(kwargs)
-    return ProjectionEvidence(**defaults)
-
-
-def _steward(jobs: dict[str, dict] | None = None) -> tuple[AgiflowStateSteward, FakeAgiflow, ReadOnlyRuntime]:
-    runtime = ReadOnlyRuntime(jobs or {})
-    agiflow = FakeAgiflow()
-    steward = AgiflowStateSteward(
-        agiflow=agiflow, runtime=runtime, project_id="other-projects-infrastructure",
-    )
-    return steward, agiflow, runtime
+    return steward.issue_evidence(**defaults)
 
 
 # -- mapping ----------------------------------------------------------------
@@ -81,28 +87,172 @@ def test_succeeded_without_evidence_stays_in_progress():
     assert agiflow.tasks[result["agiflow_task_id"]]["status"] != AGIFLOW_DONE
 
 
-def test_model_assertion_is_not_evidence():
+def test_untrusted_verifier_cannot_issue_evidence():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    with pytest.raises(AdaError) as ei:
+        steward.issue_evidence(
+            durable_job_id="job-1",
+            live_hash="abc123live",
+            verifier_identity="model_proposer",
+            source="runtime",
+        )
+    assert ei.value.code == "UNTRUSTED_VERIFIER"
+
+
+def test_model_source_cannot_issue_evidence():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    with pytest.raises(AdaError) as ei:
+        steward.issue_evidence(
+            durable_job_id="job-1",
+            live_hash="abc123live",
+            verifier_identity="verifier",
+            source="model_assertion",
+        )
+    assert ei.value.code == "UNTRUSTED_EVIDENCE_SOURCE"
+
+
+def test_caller_constructed_evidence_is_rejected():
+    """Greptile P1: a caller-built object with trusted-looking strings is not proof."""
     steward, agiflow, _ = _steward({"job-1": _job("job-1", "succeeded")})
-    result = steward.project(
-        "job-1",
-        evidence=_evidence(verifier_identity="model_proposer", source="model_assertion"),
+    forged = IssuedEvidence(
+        id="forged-id",
+        durable_job_id="job-1",
+        live_hash="abc123live",
+        verifier_identity="verifier",
+        source="runtime",
+        signature="deadbeef",
     )
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=forged.id)
+    assert ei.value.code == "UNKNOWN_EVIDENCE"
+    # no evidence_id → still withheld
+    result = steward.project("job-1")
     assert result["agiflow_status"] == AGIFLOW_IN_PROGRESS
+    assert list(agiflow.tasks.values())[0]["status"] == AGIFLOW_IN_PROGRESS
+
+
+def test_evidence_bound_to_other_job_is_denied():
+    steward, _, _ = _steward({
+        "job-1": _job("job-1", "succeeded"),
+        "job-2": _job("job-2", "succeeded"),
+    })
+    ev = _issue(steward, "job-2")
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=ev.id)
+    assert ei.value.code == "EVIDENCE_JOB_MISMATCH"
+
+
+def test_tampered_issued_evidence_signature_is_denied():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    ev = _issue(steward, "job-1")
+    steward.issued_evidence[ev.id]["signature"] = "00" * 32
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=ev.id)
+    assert ei.value.code == "FORGED_EVIDENCE"
 
 
 def test_verified_success_projects_review():
     steward, agiflow, _ = _steward({"job-1": _job("job-1", "succeeded")})
-    result = steward.project("job-1", evidence=_evidence())
+    ev = _issue(steward, "job-1")
+    result = steward.project("job-1", evidence_id=ev.id)
     assert result["agiflow_status"] == AGIFLOW_REVIEW
     assert agiflow.tasks[result["agiflow_task_id"]]["status"] == AGIFLOW_REVIEW
 
 
-def test_done_requires_human_closer_and_live_proof():
+def test_done_requires_issued_human_close_grant():
     steward, agiflow, _ = _steward({"job-1": _job("job-1", "succeeded")})
-    denied = steward.project("job-1", evidence=_evidence(allow_done=True, closer_identity="model_proposer"))
-    assert denied["agiflow_status"] == AGIFLOW_REVIEW
-    allowed = steward.project("job-1", evidence=_evidence(allow_done=True, closer_identity="human_approver"))
-    assert allowed["agiflow_status"] == AGIFLOW_DONE
+    ev = _issue(steward, "job-1")
+    with pytest.raises(AdaError) as ei:
+        steward.issue_close_grant(
+            durable_job_id="job-1", evidence_id=ev.id, closer_identity="model_proposer",
+        )
+    assert ei.value.code == "UNTRUSTED_CLOSER"
+    review = steward.project("job-1", evidence_id=ev.id)
+    assert review["agiflow_status"] == AGIFLOW_REVIEW
+    grant = steward.issue_close_grant(
+        durable_job_id="job-1", evidence_id=ev.id, closer_identity="human_approver",
+    )
+    done = steward.project("job-1", evidence_id=ev.id, close_grant_id=grant.id)
+    assert done["agiflow_status"] == AGIFLOW_DONE
+    assert agiflow.tasks[done["agiflow_task_id"]]["status"] == AGIFLOW_DONE
+
+
+def test_close_grant_is_one_time():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    ev = _issue(steward, "job-1")
+    grant = steward.issue_close_grant(
+        durable_job_id="job-1", evidence_id=ev.id, closer_identity="human_approver",
+    )
+    first = steward.project("job-1", evidence_id=ev.id, close_grant_id=grant.id)
+    assert first["agiflow_status"] == AGIFLOW_DONE
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=ev.id, close_grant_id=grant.id)
+    assert ei.value.code == "CLOSE_GRANT_CONSUMED"
+
+
+def test_forged_close_grant_id_is_rejected():
+    steward, agiflow, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    ev = _issue(steward, "job-1")
+    forged = CloseGrant(
+        id="forged-grant",
+        durable_job_id="job-1",
+        evidence_id=ev.id,
+        closer_identity="human_approver",
+        signature="deadbeef",
+    )
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=ev.id, close_grant_id=forged.id)
+    assert ei.value.code == "UNKNOWN_CLOSE_GRANT"
+    result = steward.project("job-1", evidence_id=ev.id)
+    assert result["agiflow_status"] == AGIFLOW_REVIEW
+
+
+def test_legacy_evidence_kwarg_is_not_accepted():
+    """Old forgeable API was project(..., evidence=ProjectionEvidence(...))."""
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    with pytest.raises(TypeError):
+        steward.project("job-1", evidence=object())  # type: ignore[call-arg]
+
+
+def test_missing_live_hash_cannot_issue():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    with pytest.raises(AdaError) as ei:
+        steward.issue_evidence(
+            durable_job_id="job-1",
+            live_hash="",
+            verifier_identity="verifier",
+        )
+    assert ei.value.code == "MISSING_LIVE_HASH"
+
+
+def test_issue_evidence_requires_known_job():
+    steward, _, _ = _steward()
+    with pytest.raises(AdaError) as ei:
+        steward.issue_evidence(
+            durable_job_id="missing",
+            live_hash="abc123live",
+            verifier_identity="verifier",
+        )
+    assert ei.value.code == "UNKNOWN_RUNTIME_JOB"
+
+
+def test_close_grant_without_evidence_id_is_denied():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", close_grant_id="any-grant")
+    assert ei.value.code == "CLOSE_GRANT_REQUIRES_EVIDENCE"
+
+
+def test_tampered_close_grant_signature_is_denied():
+    steward, _, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    ev = _issue(steward, "job-1")
+    grant = steward.issue_close_grant(
+        durable_job_id="job-1", evidence_id=ev.id, closer_identity="human_approver",
+    )
+    steward.close_grants[grant.id]["signature"] = "00" * 32
+    with pytest.raises(AdaError) as ei:
+        steward.project("job-1", evidence_id=ev.id, close_grant_id=grant.id)
+    assert ei.value.code == "FORGED_CLOSE_GRANT"
 
 
 def test_failed_job_projects_blocked():
@@ -126,7 +276,8 @@ def test_distinct_events_get_distinct_comments():
     steward, agiflow, runtime = _steward(jobs)
     steward.project("job-1")
     runtime.jobs["job-1"] = _job("job-1", "succeeded")
-    steward.project("job-1", evidence=_evidence())
+    ev = _issue(steward, "job-1")
+    steward.project("job-1", evidence_id=ev.id)
     kinds = {c["idempotency_key"] for c in agiflow.comments}
     assert len(agiflow.comments) == 2
     assert len(kinds) == 2
@@ -138,9 +289,8 @@ def test_newer_human_edit_is_not_overwritten():
     steward, agiflow, _ = _steward({"job-1": _job("job-1", "running")})
     first = steward.project("job-1")
     agiflow.simulate_human_edit(first["agiflow_task_id"], status=AGIFLOW_DONE)
-    runtime_now_failed = steward
     steward.runtime.jobs["job-1"] = _job("job-1", "failed")
-    result = runtime_now_failed.project("job-1")
+    result = steward.project("job-1")
     assert result["status"] == "CONFLICT"
     assert result["reason"] == "newer_human_edit"
     assert agiflow.tasks[first["agiflow_task_id"]]["status"] == AGIFLOW_DONE
@@ -182,16 +332,30 @@ def test_replay_preserves_human_conflict():
     steward, agiflow, _ = _steward({"job-1": _job("job-1", "running")})
     first = steward.project("job-1")
     agiflow.simulate_human_edit(first["agiflow_task_id"], status=AGIFLOW_CANCELLED)
-    agiflow.unavailable = True
     steward.runtime.jobs["job-1"] = _job("job-1", "succeeded")
-    # project while down
-    steward.agiflow.unavailable = True
-    parked = steward.project("job-1", evidence=_evidence())
+    ev = _issue(steward, "job-1")
+    agiflow.unavailable = True
+    parked = steward.project("job-1", evidence_id=ev.id)
     assert parked["status"] == "PENDING_SYNC"
     agiflow.unavailable = False
     replayed = steward.replay_outbox()
     assert replayed["conflicts"] == 1
     assert agiflow.tasks[first["agiflow_task_id"]]["status"] == AGIFLOW_CANCELLED
+
+
+def test_outbox_does_not_store_forgeable_evidence_fields():
+    steward, agiflow, _ = _steward({"job-1": _job("job-1", "succeeded")})
+    ev = _issue(steward, "job-1")
+    agiflow.unavailable = True
+    steward.project("job-1", evidence_id=ev.id)
+    pending = steward.pending_outbox()
+    for row in pending:
+        payload = row["payload"]
+        assert "verified" not in payload
+        assert "verifier_identity" not in payload
+        assert "closer_identity" not in payload
+        if row["kind"] == "project":
+            assert payload.get("evidence_id") == ev.id
 
 
 # -- steward must not own runtime or execute Agiflow -----------------------
@@ -205,7 +369,6 @@ def test_steward_cannot_enqueue_or_lease():
         runtime.acquire_lease("job-1")
     assert "enqueue" in runtime.write_attempts
     assert "acquire_lease" in runtime.write_attempts
-    # projecting still works and does not add writes
     steward.project("job-1")
     assert runtime.write_attempts == ["enqueue", "acquire_lease"]
 
@@ -218,7 +381,7 @@ def test_steward_must_not_call_agiflow_execute():
     assert agiflow.execute_calls == ["execute"]
 
 
-def test_clickup_is_never_required(monkeypatch):
+def test_clickup_is_never_required():
     class ClickUpSpy:
         def __init__(self):
             self.calls = []
@@ -231,11 +394,21 @@ def test_clickup_is_never_required(monkeypatch):
     runtime = ReadOnlyRuntime({"job-1": _job("job-1", "queued")})
     agiflow = FakeAgiflow()
     steward = AgiflowStateSteward(
-        agiflow=agiflow, runtime=runtime, project_id="p", clickup=spy,
+        agiflow=agiflow, runtime=runtime, project_id="p", hmac_key=HMAC_KEY, clickup=spy,
     )
     steward.project("job-1")
     assert spy.calls == []
     assert steward.clickup_was_used() is False
+
+
+def test_hmac_key_too_short_fails_closed():
+    with pytest.raises(RuntimeError):
+        AgiflowStateSteward(
+            agiflow=FakeAgiflow(),
+            runtime=ReadOnlyRuntime(),
+            project_id="p",
+            hmac_key="short",
+        )
 
 
 # -- rollback of projection, not of runtime --------------------------------
@@ -279,7 +452,8 @@ def test_in_process_canary_job_to_review_with_outage_and_rollback():
 
     agiflow.unavailable = True
     runtime.jobs["canary-1"] = _job("canary-1", "succeeded", title="canary metadata")
-    parked = steward.project("canary-1", evidence=_evidence())
+    ev = _issue(steward, "canary-1")
+    parked = steward.project("canary-1", evidence_id=ev.id)
     assert parked["status"] == "PENDING_SYNC"
     assert runtime.get_job("canary-1")["state"] == "succeeded"
 
@@ -292,7 +466,6 @@ def test_in_process_canary_job_to_review_with_outage_and_rollback():
     rolled = steward.rollback_projection("canary-1")
     assert rolled["status"] == "ROLLED_BACK"
     assert agiflow.tasks[task_id]["status"] == AGIFLOW_IN_PROGRESS
-    # runtime job is still succeeded — projection rollback is not a runtime undo
     assert runtime.get_job("canary-1")["state"] == "succeeded"
 
 

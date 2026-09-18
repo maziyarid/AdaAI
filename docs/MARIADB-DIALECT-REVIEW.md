@@ -23,7 +23,7 @@ Reviewed files:
 - Prefix `ada_` — does not collide with documented control-core job/schedule/lease tables
 - `ada_policy_releases.active_component` VIRTUAL generated column + UNIQUE (MariaDB 10.2+; multiple NULLs allowed, so only one ACTIVE row per component)
 - `ada_qalam_assets.path_hash CHAR(64)` primary-key component (full-path SHA-256) instead of unique `path(191)` prefix
-- `ada_agiflow_task_map` / `ada_agiflow_outbox` / `ada_agiflow_projection_events` — projection only; unique durable_job_id and outbox idempotency_key; no jobs/schedules tables
+- `ada_agiflow_task_map` / `ada_agiflow_outbox` / `ada_agiflow_evidence` / `ada_agiflow_close_grants` / `ada_agiflow_projection_events` — projection only; unique durable_job_id and outbox idempotency_key; HMAC-SHA256 signatures on issued evidence and close grants (`CHAR(64)`); no jobs/schedules tables
 
 ## Intentional absences (do not add)
 

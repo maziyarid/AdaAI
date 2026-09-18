@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS ada_agiflow_task_map (
 
 -- Outbox survives Agiflow outage. Replay is keyed by idempotency_key so
 -- comments, tasks and status transitions are not duplicated.
+-- Payload stores evidence_id / close_grant_id only — never verified flags
+-- or caller-supplied verifier/closer identities.
 CREATE TABLE IF NOT EXISTS ada_agiflow_outbox (
   id CHAR(36) NOT NULL,
   idempotency_key CHAR(64) NOT NULL,
@@ -31,6 +33,35 @@ CREATE TABLE IF NOT EXISTS ada_agiflow_outbox (
   PRIMARY KEY (id),
   UNIQUE KEY uq_ada_agiflow_outbox_idem (idempotency_key),
   KEY idx_ada_agiflow_outbox_pending (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- HMAC-issued evidence is the only Review proof. Callers cannot construct
+-- a verified=true object; projection looks up id and verifies signature.
+CREATE TABLE IF NOT EXISTS ada_agiflow_evidence (
+  id CHAR(36) NOT NULL,
+  durable_job_id VARCHAR(191) NOT NULL,
+  live_hash VARCHAR(128) NOT NULL,
+  verifier_identity VARCHAR(128) NOT NULL,
+  source VARCHAR(32) NOT NULL,
+  signature CHAR(64) NOT NULL,
+  issued_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id),
+  KEY idx_ada_agiflow_evidence_job (durable_job_id, issued_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One-time human close grants are the only Done proof. consumed is fail-closed.
+CREATE TABLE IF NOT EXISTS ada_agiflow_close_grants (
+  id CHAR(36) NOT NULL,
+  durable_job_id VARCHAR(191) NOT NULL,
+  evidence_id CHAR(36) NOT NULL,
+  closer_identity VARCHAR(128) NOT NULL,
+  signature CHAR(64) NOT NULL,
+  consumed TINYINT(1) NOT NULL DEFAULT 0,
+  issued_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  consumed_at TIMESTAMP(6) NULL,
+  PRIMARY KEY (id),
+  KEY idx_ada_agiflow_grant_job (durable_job_id, consumed),
+  KEY idx_ada_agiflow_grant_evidence (evidence_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ada_agiflow_projection_events (
