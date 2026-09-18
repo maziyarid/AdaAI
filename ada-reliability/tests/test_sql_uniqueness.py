@@ -64,3 +64,23 @@ def test_failed_run_outbox_is_distinct_from_agiflow_projection():
     assert "CREATE TABLE IF NOT EXISTS ada_agiflow_outbox" not in text
     agiflow = (SQL / "005_ada_agiflow_projection.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS ada_failed_runs" not in agiflow
+
+
+def test_runbook_stops_before_006_until_legacy_outbox_reconciled():
+    """Greptile P1: reconciliation is a pre-apply stop, not a post-apply footnote."""
+    runbook = (Path(__file__).resolve().parents[2] / "docs" / "MIGRATION-RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    stop_at = runbook.find("Live durability reconciliation complete")
+    apply_at = runbook.find("## Apply")
+    assert stop_at != -1
+    assert apply_at != -1
+    assert stop_at < apply_at
+    pre = runbook[:apply_at]
+    assert "006_ada_failed_run_outbox.sql" in pre
+    assert "ada_failed_runs" in pre
+    assert "pd_worker_runs" in pre
+    assert "pd_outbox" in pre
+    assert "pending_external_sync" in pre
+    # Do not name the migration file 006_ada_failed_runs.
+    assert "006_ada_failed_runs" not in runbook

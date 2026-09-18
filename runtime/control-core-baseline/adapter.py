@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import json
 
@@ -16,22 +17,63 @@ import json
 class ControlCoreConfig:
     base_url: str = "http://127.0.0.1:8770"
     timeout_seconds: float = 5.0
+    # Optional CONTROL_API_TOKEN. Never commit values. Unauthenticated
+    # GET /health is expected to 401; that is the live healthy signal.
+    api_token: Optional[str] = None
 
 
 class ControlCoreAdapter:
     def __init__(self, config: Optional[ControlCoreConfig] = None):
         self.config = config or ControlCoreConfig()
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def _get(self, path: str, token: Optional[str] = None) -> dict[str, Any]:
         req = Request(self.config.base_url + path, method="GET")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
         with urlopen(req, timeout=self.config.timeout_seconds) as resp:
             return json.loads(resp.read().decode())
 
     def health(self) -> dict[str, Any]:
-        return self._get("/health")
+        """Probe live `/health` without making the endpoint public.
+
+        Live `HEALTH_TARGETS` treats unauthenticated HTTP 401 as healthy
+        for `http://127.0.0.1:8770/health` (BLACKOUT_SENTINEL). The 200
+        JSON branch exists only after `auth()` with `CONTROL_API_TOKEN`.
+        Do not strip that token. Do not add a public `/health`.
+        """
+        token = self.config.api_token
+        url = self.config.base_url + "/health"
+        req = Request(url, method="GET")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        try:
+            with urlopen(req, timeout=self.config.timeout_seconds) as resp:
+                payload = json.loads(resp.read().decode())
+                status = getattr(resp, "status", 200)
+        except HTTPError as exc:
+            if exc.code == 401 and not token:
+                return {
+                    "ok": True,
+                    "http_status": 401,
+                    "contract": "protected-health",
+                    "authenticated": False,
+                }
+            raise
+        if not token:
+            raise RuntimeError(
+                "HEALTH_ENDPOINT_PUBLIC: unauthenticated /health returned "
+                f"{status}; live contract expects 401. Do not make /health public."
+            )
+        return {
+            "ok": True,
+            "http_status": status,
+            "contract": "authenticated-health",
+            "authenticated": True,
+            "body": payload,
+        }
 
     def get_job(self, job_id: str) -> dict[str, Any]:
-        return self._get(f"/jobs/{job_id}")
+        return self._get(f"/jobs/{job_id}", token=self.config.api_token)
 
 
 # Documented live behavior we must preserve. Tests assert this map exists so
@@ -52,4 +94,6 @@ PRESERVED_BEHAVIOR = {
     "service": "maziyar-control-core.service",
     "implementation": "/opt/maziyar-control-core",
     "mistral_worker": "127.0.0.1:9102",
+    "health_unauthenticated_status": 401,
+    "health_endpoint_public": False,
 }

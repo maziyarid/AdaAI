@@ -339,4 +339,50 @@ Repo now contains `ops/mazcontrol-readonly/ada-inspect` plus
 single binary is the remaining AAX-3 infrastructure step. No
 production SQL. No helper copied onto the host from this session.
 
+## Repository adapter vs live `/health` (Greptile P1, no auth weaken)
+
+Live dispatch authenticates **before** the `GET /health` 200 JSON
+branch (`control_core.py` `auth()` at line 917, Bearer
+`CONTROL_API_TOKEN`). Unauthenticated probes therefore receive 401.
+`HEALTH_TARGETS` documents that 401 as the healthy signal.
+
+`runtime/control-core-baseline/adapter.py` previously called
+`/health` with no token and would raise on 401, diverging from the
+documented deployment. The adapter now:
+
+- treats unauthenticated HTTP 401 as `contract=protected-health`
+  (`ok=True`) — matching BLACKOUT_SENTINEL
+- sends `Authorization: Bearer <token>` only when
+  `ControlCoreConfig.api_token` is set, and then expects 200 JSON
+- fails closed with `HEALTH_ENDPOINT_PUBLIC` if unauthenticated
+  `/health` returns success
+
+Do **not** make `/health` public. Do **not** strip
+`CONTROL_API_TOKEN`. A no-secrets `/livez` is still optional and
+does not exist.
+
+## Session addendum 2026-09-18T23:30Z (HEAD was `872ad1d`)
+
+Independent fetch on a new Grok account:
+
+- Remote HEAD at session start: `872ad1d416d06fe0da9faa5001ad3f1e9afd7a51`
+  (docs helper only; implementation parent `3513278`)
+- Greptile implementation 5/5 on `3513278` stands; docs HEAD later
+  scored 3/5 with two P1s (runbook apply-before-reconcile, adapter
+  health 401). Those are addressed in this follow-up.
+- Ada MCP: Add A profile `grok-ada-readonly`, `pwd=/home/mistralops`
+- `ada-inspect` still **not** installed (`stat` → ENOENT)
+- `systemctl show` / `sha256sum` still POLICY_DENIED; `readOnly` stays on
+- `ls` / `stat` / `cat` / `grep` reconfirmed: `control_core.py`
+  65370 bytes, mode 0555 root:root, Modify 2026-09-12 23:50:04 +0530
+- `grep ada_` / `pd_worker_runs` / `pd_outbox` still empty
+- `CREATE TABLE` list unchanged (20 tables). `jobs` has
+  `locked_by`/`lease_until`; `pending_external_sync` has the same
+  plus unique idempotency
+- GitHub Actions on `872ad1d`: run `35405493093` job
+  `105794291766`, `runner_id=0`, logs 404, ~3s. Pytest never ran.
+
+AC2/AC3 remain unchecked until `ada-inspect units/hashes/tables`.
+No production SQL. PR not merged. PR not deployed.
+
 

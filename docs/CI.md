@@ -67,3 +67,18 @@ application code to satisfy a runner that never starts.
 `mergeable_state=unstable` on PR #2 is this Actions signal. Greptile
 5/5 on implementation `3513278` is independent of it.
 
+## 2026-09-18T23:30Z — runner still never starts (HEAD `872ad1d`)
+
+Same pattern on the mazcontrol-helper SHA:
+
+- pull_request run `35405493093` job `105794291766`
+- push run `35405489842` job `105794285774`
+
+Both `conclusion=failure` in ~3 seconds. Job JSON again:
+`runner_id=0`, `runner_name=""`, `runner_group_id=0`. Log download
+HTTP 404. Checkout / setup-python / pytest never ran.
+
+Do not rewrite Ada application code for a runner that is never
+assigned. Local proof remains the test oracle until a hosted runner
+actually starts.
+
