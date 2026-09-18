@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS ada_failed_runs (
   last_error TEXT NULL,
   lease_owner VARCHAR(128) NULL,
   lease_until TIMESTAMP(6) NULL,
+  claim_generation INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id),
@@ -44,11 +45,25 @@ CREATE TABLE IF NOT EXISTS ada_failed_runs (
 
 -- Claim is a store-level compare-and-set, not read-then-write. MariaDB:
 --   UPDATE ada_failed_runs
---      SET lifecycle='inflight', lease_owner=?, lease_until=?
+--      SET lifecycle='inflight', lease_owner=?, lease_until=?,
+--          claim_generation=claim_generation+1
 --    WHERE id=?
 --      AND lifecycle IN ('queued','retryable')
 --      AND (next_retry_at IS NULL OR next_retry_at <= ?)
 --   (affected rows = 1 means this worker owns the retry; 0 means lost the race)
+--
+-- Lease expire/reclaim is the same class of CAS. A detached inflight copy
+-- must not overwrite a newer claim. MariaDB:
+--   UPDATE ada_failed_runs
+--      SET lifecycle='retryable', lease_owner=NULL, lease_until=NULL,
+--          next_retry_at=?
+--    WHERE id=?
+--      AND lifecycle='inflight'
+--      AND lease_owner <=> ?
+--      AND lease_until <=> ?
+--      AND (lease_until IS NULL OR lease_until <= ?)
+--      AND claim_generation <=> ?
+--   (affected rows = 0 means another worker already reclaimed)
 -- Do not apply this migration here; AAX-7 rehearsal only.
 
 CREATE TABLE IF NOT EXISTS ada_failed_run_events (

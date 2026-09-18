@@ -54,6 +54,9 @@ def test_failed_run_outbox_is_distinct_from_agiflow_projection():
     assert "CREATE TABLE IF NOT EXISTS ada_failed_run_events" in text
     assert "UNIQUE KEY uq_ada_failed_runs_idem (idempotency_key)" in text
     assert "DISTINCT from ada_agiflow_outbox" in text
+    assert "claim_generation INT NOT NULL DEFAULT 0" in text
+    assert "AND lifecycle='inflight'" in text
+    assert "AND claim_generation <=> ?" in text
     assert "DROP TABLE" not in text
     assert "CREATE TABLE IF NOT EXISTS jobs" not in text
     assert "CREATE TABLE IF NOT EXISTS schedules" not in text

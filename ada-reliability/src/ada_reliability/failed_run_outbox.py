@@ -95,6 +95,8 @@ SUPPORTED_MUTATION_KINDS = frozenset({"none"}) | PRODUCTION_MUTATION_KINDS | fro
 })
 ENGINE_SUCCESS = frozenset({"APPLIED", "DUPLICATE_SKIPPED"})
 ENGINE_RETRYABLE = frozenset({"FAILED", "EXECUTING", "REQUIRES_ENGINE", "UNAVAILABLE", "ENGINE_RETRY"})
+# Actual engine replay attempts that must consume retry budget.
+ENGINE_CONSUMES_ATTEMPT = frozenset({"FAILED", "EXECUTING", "ENGINE_RETRY"})
 
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_BATCH_LIMIT = 10
@@ -171,6 +173,16 @@ class FailedRunStore(Protocol):
     def claim_if_eligible(
         self, rec_id: str, *, owner: str, now: datetime, lease_seconds: int,
     ) -> Optional[dict]: ...
+    def expire_lease_if_match(
+        self,
+        rec_id: str,
+        *,
+        expected_lifecycle: str,
+        expected_owner: Optional[str],
+        expected_until: Optional[str],
+        expected_generation: Optional[int],
+        now: datetime,
+    ) -> Optional[dict]: ...
     def dump(self) -> dict: ...
 
 
@@ -178,8 +190,12 @@ class InMemoryFailedRunStore:
     """Test double. dump()/load() simulate process restart, not VPS MariaDB.
 
     claim_if_eligible is a compare-and-set: it succeeds only if the row is
-    still queued/retryable and due. A threading.Lock makes that CAS atomic
-    in-process; MariaDB must use UPDATE ... WHERE lifecycle IN (...).
+    still queued/retryable and due. expire_lease_if_match is the matching CAS
+    for reclaim: it succeeds only if the stored row still has the expected
+    expired inflight lease (id, lifecycle, owner, until, generation).
+    A threading.Lock makes those CAS operations atomic in-process; MariaDB
+    must use UPDATE ... WHERE lifecycle / lease_owner / lease_until /
+    claim_generation. An in-process mutex alone is not the production lock.
     """
 
     def __init__(self):
@@ -246,6 +262,55 @@ class InMemoryFailedRunStore:
             rec["lifecycle"] = LIFECYCLE_INFLIGHT
             rec["lease_owner"] = owner
             rec["lease_until"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            rec["claim_generation"] = int(rec.get("claim_generation") or 0) + 1
+            return copy.deepcopy(rec)
+
+    def expire_lease_if_match(
+        self,
+        rec_id: str,
+        *,
+        expected_lifecycle: str,
+        expected_owner: Optional[str],
+        expected_until: Optional[str],
+        expected_generation: Optional[int],
+        now: datetime,
+    ) -> Optional[dict]:
+        """CAS: inflight → retryable only if the stored lease is still that lease.
+
+        MariaDB equivalent:
+          UPDATE ada_failed_runs
+             SET lifecycle='retryable', lease_owner=NULL, lease_until=NULL,
+                 next_retry_at=?
+           WHERE id=?
+             AND lifecycle='inflight'
+             AND lease_owner <=> ?
+             AND lease_until <=> ?
+             AND (lease_until IS NULL OR lease_until <= ?)
+             AND claim_generation <=> ?
+        """
+        with self._lock:
+            key = self.by_id.get(rec_id)
+            if key is None:
+                return None
+            rec = self.rows.get(key)
+            if rec is None:
+                return None
+            if rec.get("lifecycle") != expected_lifecycle:
+                return None
+            if rec.get("lease_owner") != expected_owner:
+                return None
+            if rec.get("lease_until") != expected_until:
+                return None
+            if expected_generation is not None:
+                if int(rec.get("claim_generation") or 0) != int(expected_generation):
+                    return None
+            until = rec.get("lease_until")
+            if until and datetime.fromisoformat(until) > now:
+                return None
+            rec["lifecycle"] = LIFECYCLE_RETRYABLE
+            rec["lease_owner"] = None
+            rec["lease_until"] = None
+            rec["next_retry_at"] = now.isoformat()
             return copy.deepcopy(rec)
 
     def dump(self) -> dict:
@@ -293,6 +358,18 @@ class UnavailableFailedRunStore:
 
     def claim_if_eligible(
         self, rec_id: str, *, owner: str, now: datetime, lease_seconds: int,
+    ) -> Optional[dict]:
+        raise AdaError("DURABLE_STORE_UNAVAILABLE", "failed-run store is down")
+
+    def expire_lease_if_match(
+        self,
+        rec_id: str,
+        *,
+        expected_lifecycle: str,
+        expected_owner: Optional[str],
+        expected_until: Optional[str],
+        expected_generation: Optional[int],
+        now: datetime,
     ) -> Optional[dict]:
         raise AdaError("DURABLE_STORE_UNAVAILABLE", "failed-run store is down")
 
@@ -430,6 +507,7 @@ class FailedRunOutbox:
             "last_error": "UNKNOWN_MUTATION_KIND" if unknown_kind else reason,
             "lease_owner": None,
             "lease_until": None,
+            "claim_generation": 0,
         }
         try:
             stored = self.store.put(rec)
@@ -569,11 +647,18 @@ class FailedRunOutbox:
         }
 
     def replay_one(self, rec: dict) -> dict:
+        snapshot_owner = rec.get("lease_owner")
+        snapshot_gen = rec.get("claim_generation")
         rec = self.store.get_by_id(rec["id"]) or rec
         if rec["lifecycle"] == LIFECYCLE_PARKED:
             return {"status": "PARKED", "reason": "deterministic_blocker"}
         if rec["lifecycle"] in TERMINAL:
             return {"status": rec["lifecycle"].upper(), "reason": "already_terminal"}
+        if snapshot_owner is not None:
+            if rec.get("lease_owner") != snapshot_owner:
+                return {"status": "CONFLICT", "reason": "stale_lease"}
+            if snapshot_gen is not None and int(rec.get("claim_generation") or 0) != int(snapshot_gen):
+                return {"status": "CONFLICT", "reason": "stale_lease"}
         kind = rec.get("mutation_kind") or "none"
         key = rec.get("mutation_idempotency_key") or rec["idempotency_key"]
 
@@ -713,6 +798,8 @@ class FailedRunOutbox:
             skipped = status == "DUPLICATE_SKIPPED"
             reason = "duplicate_mutation_skipped" if skipped else "engine_applied"
             return self._succeed(rec, reason, skipped=skipped)
+        if status in ENGINE_CONSUMES_ATTEMPT:
+            return self._fail_attempt(rec, status)
         if status in ENGINE_RETRYABLE:
             return self._requeue(rec, status)
         return self._park(rec, f"UNKNOWN_ENGINE_STATUS:{status!s}")
@@ -723,11 +810,16 @@ class FailedRunOutbox:
         until = rec.get("lease_until")
         if until and datetime.fromisoformat(until) > now:
             return rec
-        rec["lifecycle"] = LIFECYCLE_RETRYABLE
-        rec["lease_owner"] = None
-        rec["lease_until"] = None
-        rec["next_retry_at"] = now.isoformat()
-        stored = self.store.put(rec)
+        stored = self.store.expire_lease_if_match(
+            rec["id"],
+            expected_lifecycle=LIFECYCLE_INFLIGHT,
+            expected_owner=rec.get("lease_owner"),
+            expected_until=rec.get("lease_until"),
+            expected_generation=rec.get("claim_generation"),
+            now=now,
+        )
+        if stored is None:
+            return self.store.get_by_id(rec["id"]) or rec
         self.store.append_event(stored["id"], "lease_expired", {})
         return stored
 

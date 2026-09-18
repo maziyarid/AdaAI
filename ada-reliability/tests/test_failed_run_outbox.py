@@ -545,3 +545,149 @@ def test_legacy_unknown_mutation_kind_is_parked_on_replay():
     stored = box.store.get("legacy-unk")
     assert stored["lifecycle"] == LIFECYCLE_PARKED
     assert stored["lifecycle"] != LIFECYCLE_SUCCEEDED
+
+
+# -- Greptile P1: lease expire CAS / retry budget ---------------------------
+
+def test_stale_lease_expire_cannot_overwrite_fresh_claim():
+    """A sees expired lease; B reclaims; A's stale expire must not clobber B."""
+    clock = Clock()
+    calls: list[str] = []
+
+    def engine(rec):
+        calls.append(rec.get("lease_owner") or "none")
+        return {"status": "APPLIED"}
+
+    store = InMemoryFailedRunStore()
+    box = FailedRunOutbox(
+        store=store, clock=clock, lease_seconds=30, engine_retry=engine,
+    )
+    _fail(
+        box,
+        idempotency_key="stale-lease",
+        mutation_kind="wordpress_mutation",
+        mutation_idempotency_key="mut-stale",
+    )
+    claimed_a = box.claim_batch(owner="worker-a")
+    assert len(claimed_a) == 1
+    stale_a = claimed_a[0]
+    assert stale_a["lease_owner"] == "worker-a"
+    gen_a = stale_a["claim_generation"]
+    until_a = stale_a["lease_until"]
+
+    clock.advance(seconds=31)
+
+    claimed_b = box.claim_batch(owner="worker-b")
+    assert len(claimed_b) == 1
+    fresh_b = claimed_b[0]
+    assert fresh_b["lease_owner"] == "worker-b"
+    assert fresh_b["lifecycle"] == LIFECYCLE_INFLIGHT
+    assert fresh_b["claim_generation"] != gen_a
+    assert fresh_b["lease_until"] != until_a
+
+    rejected = box._expire_lease(stale_a, clock())
+    current = store.get("stale-lease")
+    assert current["lease_owner"] == "worker-b"
+    assert current["lease_until"] == fresh_b["lease_until"]
+    assert current["lifecycle"] == LIFECYCLE_INFLIGHT
+    assert current["lifecycle"] != LIFECYCLE_RETRYABLE
+    assert current["claim_generation"] == fresh_b["claim_generation"]
+    assert rejected["lease_owner"] == "worker-b"
+
+    owned_a = store.claim_if_eligible(
+        stale_a["id"], owner="worker-a", now=clock(), lease_seconds=30,
+    )
+    assert owned_a is None
+
+    stale_replay = box.replay_one(stale_a)
+    assert stale_replay["status"] == "CONFLICT"
+    assert stale_replay["reason"] == "stale_lease"
+    assert calls == []
+
+    live_replay = box.replay_one(fresh_b)
+    assert live_replay["status"] == "SUCCEEDED"
+    assert calls == ["worker-b"]
+    assert store.get("stale-lease")["lifecycle"] == LIFECYCLE_SUCCEEDED
+    assert len(store.all()) == 1
+
+
+def test_engine_failed_consumes_one_attempt():
+    box = _outbox(engine_retry=lambda rec: {"status": "FAILED"})
+    _fail(box, idempotency_key="fail-budget")
+    before = box.store.get("fail-budget")["attempt_count"]
+    assert before == 1
+    result = box.replay_batch()
+    rec = box.store.get("fail-budget")
+    assert rec["attempt_count"] == before + 1
+    assert rec["lifecycle"] == LIFECYCLE_RETRYABLE
+    assert rec["lifecycle"] != LIFECYCLE_SUCCEEDED
+    assert result["applied"] == 0
+    assert result["claimed"] == 1
+
+
+def test_engine_executing_consumes_one_attempt():
+    box = _outbox(engine_retry=lambda rec: {"status": "EXECUTING"})
+    _fail(box, idempotency_key="exec-budget")
+    before = box.store.get("exec-budget")["attempt_count"]
+    box.replay_batch()
+    rec = box.store.get("exec-budget")
+    assert rec["attempt_count"] == before + 1
+    assert rec["lifecycle"] == LIFECYCLE_RETRYABLE
+    assert rec["lifecycle"] != LIFECYCLE_SUCCEEDED
+
+
+def test_repeated_failed_replay_reaches_max_attempts_and_dead_letters():
+    box = _outbox(engine_retry=lambda rec: {"status": "FAILED"})
+    _fail(box, idempotency_key="dlq-engine", max_attempts=3)
+    assert box.store.get("dlq-engine")["attempt_count"] == 1
+
+    first = box.replay_batch()
+    rec = box.store.get("dlq-engine")
+    assert rec["attempt_count"] == 2
+    assert rec["lifecycle"] == LIFECYCLE_RETRYABLE
+    assert first["dead_letter"] == 0
+
+    second = box.replay_batch()
+    rec = box.store.get("dlq-engine")
+    assert rec["attempt_count"] == 3
+    assert rec["lifecycle"] == LIFECYCLE_DEAD_LETTER
+    assert second["dead_letter"] == 1
+    assert box.claim_batch() == []
+    assert box.eligible() == []
+
+    third = box.replay_batch()
+    assert third["claimed"] == 0
+    rec = box.store.get("dlq-engine")
+    assert rec["lifecycle"] == LIFECYCLE_DEAD_LETTER
+    assert rec["attempt_count"] == 3
+
+
+def test_parked_scan_does_not_consume_attempts():
+    box = _outbox()
+    _fail(
+        box, failure_class=CLASS_OOM, exit_code=137, reason="oom",
+        idempotency_key="park-scan",
+    )
+    before = box.store.get("park-scan")["attempt_count"]
+    box.eligible()
+    box.claim_batch()
+    box.replay_batch()
+    rec = box.store.get("park-scan")
+    assert rec["attempt_count"] == before
+    assert rec["lifecycle"] == LIFECYCLE_PARKED
+
+
+def test_requires_engine_does_not_burn_retry_budget():
+    box = _outbox()
+    _fail(
+        box,
+        idempotency_key="need-eng",
+        mutation_kind="wordpress_mutation",
+        mutation_idempotency_key="mut-eng",
+    )
+    before = box.store.get("need-eng")["attempt_count"]
+    result = box.replay_batch()
+    rec = box.store.get("need-eng")
+    assert result["requires_engine"] == 1
+    assert rec["attempt_count"] == before
+    assert rec["lifecycle"] != LIFECYCLE_DEAD_LETTER
