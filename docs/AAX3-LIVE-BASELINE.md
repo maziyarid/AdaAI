@@ -127,6 +127,33 @@ Seeded schedules named in README: `SEO_SCOUT`, `PROJECT_CONTROLLER`,
 - `/health` probe caller (AAX-4)
 - Production apply of repo `ada_*` SQL
 
+## Session addendum 2026-09-19 (after PR head `2dd1ffb`)
+
+`grok-ada-readonly` was disconnected in the Grok client cache, then
+reconnected. Viewer identity is unchanged:
+
+- `pwd`: `/home/mistralops`
+- `uname -a`: `Linux server.maziyarid.com 5.14.0-687.46.1.el9_8.x86_64`
+- `/opt/maziyar-control-core` still exists
+- `control_core.py` still 65370 bytes / 1096 lines (`wc`)
+
+`printf` glob of `/etc/systemd/system/maziyar*` still shows
+`maziyar-control-core.service`, `maziyar-mistral-worker.service`,
+`maziyar-agiflow-outbox-bridge.service` + `.timer`, and the other
+units listed above. MariaDB client/server config files exist under
+`/etc/my.cnf.d/` (contents not read). `/var/lib/mysql/*` does not
+expand for this viewer.
+
+Viewer MCP policy this session is stricter than the 22:15Z capture:
+classified-safe tools (`ls`, `cat`, `grep`, `stat`, `systemctl`,
+`sha256sum`, `awk`) are refused on the readOnly profile; `python3`
+is classified destructive and refused. Do not clear `readOnly`.
+Do not treat this as Ada SSH being down again.
+
+Still not captured: source sha256, systemd ActiveState/SubState,
+live `SHOW TABLES` / `mysqldump --no-data`, `ada_*` vs `pd_*`,
+`pending_external_sync` rows, `/health` caller (AAX-4).
+
 ## Remaining AAX-3 work
 
 1. Privileged or mazcontrol-scoped `systemctl status` + `mysqldump --no-data`.
@@ -134,3 +161,5 @@ Seeded schedules named in README: `SEO_SCOUT`, `PROJECT_CONTROLLER`,
 3. Identify localhost `/health` 401 caller without weakening auth (AAX-4).
 4. Diagnose unresolved `pending_external_sync` rows without mass-retry
    (AAX-5).
+5. Do not clear viewer `readOnly` to bypass the current MCP classifier.
+

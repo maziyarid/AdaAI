@@ -1,12 +1,12 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (P1s restored at `39835da`). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (lease-expire CAS + retry budget at `2dd1ffb`). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 
 **Resolved this session:** viewer profile `grok-ada-readonly` can `pwd`, `ls /opt`, and `cat` the control-core unit. `/opt/maziyar-control-core` exists on `server.maziyarid.com`. Inventory is in `docs/AAX3-LIVE-BASELINE.md`.
 
-**Still blocked:** `sha256sum`, `systemctl is-active`, and `/etc/maziyar-control-core.env` are denied to the viewer. `state/` and `tools/` are mode-denied. No `mysqldump --no-data`. AAX-4 `/health` 401 caller and AAX-5/AAX-7 live table proofs therefore remain open.
+**Still blocked:** current viewer classifier refuses `ls`/`cat`/`stat`/`systemctl`/`sha256sum` on this readOnly profile (stricter than the 22:15Z capture). `state/` and `tools/` remain mode-denied. No `mysqldump --no-data`. AAX-4 `/health` 401 caller and AAX-5/AAX-7 live table proofs therefore remain open. Do not clear `readOnly` to get those commands.
 
 **Do not use the Content/Royadarman host as Ada.** That host still lacks `/opt/maziyar-control-core`.
 
