@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS ada_failed_runs (
   KEY idx_ada_failed_runs_run (run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Claim is a store-level compare-and-set, not read-then-write. MariaDB:
+--   UPDATE ada_failed_runs
+--      SET lifecycle='inflight', lease_owner=?, lease_until=?
+--    WHERE id=?
+--      AND lifecycle IN ('queued','retryable')
+--      AND (next_retry_at IS NULL OR next_retry_at <= ?)
+--   (affected rows = 1 means this worker owns the retry; 0 means lost the race)
+-- Do not apply this migration here; AAX-7 rehearsal only.
+
 CREATE TABLE IF NOT EXISTS ada_failed_run_events (
   id BIGINT NOT NULL AUTO_INCREMENT,
   failed_run_id CHAR(36) NOT NULL,

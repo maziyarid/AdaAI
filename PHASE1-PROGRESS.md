@@ -1,5 +1,31 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19 — AAX-15 restore + Greptile P1s (atomic claim / no silent succeed)
+
+**Fetched HEAD:** `4caefb5970b3d6245ce11801f59b07d0df2b4584` (placeholders).
+**Baseline restored from:** `903da122dcb26e63bd3ab707e8f0a96321fcfc40` via real git checkout, not Contents API.
+
+### What was broken on fetched HEAD
+Contents-API commits `574b670` / `4caefb5` replaced
+`failed_run_outbox.py` with `PLACEHOLDER_WILL_BE_REPLACED` and
+`test_failed_run_outbox.py` with `TEMP_SEE_NEXT`. Greptile 1/5:
+broken package import plus the three original outbox P1s.
+
+### Done this session (in-repo)
+- Restored both files from `903da12` (26 outbox tests kept; uniqueness HMAC + AAX-15 distinctness kept).
+- P1 #1: `FailedRunStore.claim_if_eligible` compare-and-set. `claim_batch` owns a row only if still queued/retryable/due. In-memory lock is atomicity; MariaDB must `UPDATE ... WHERE lifecycle IN ('queued','retryable')`.
+- P1 #2: `engine_retry` FAILED / EXECUTING / unknown statuses requeue or park. Only `APPLIED` / `DUPLICATE_SKIPPED` become terminal succeeded.
+- P1 #3: unknown `mutation_kind` parked on persist against `SUPPORTED_MUTATION_KINDS`; legacy/corrupt rows parked on replay.
+- 6 new regressions. Full suite **141 passed**. Clean venv import of `AdaEngine` / `FailedRunOutbox` works.
+- SQL 006 documents the CAS claim. **Not applied.**
+
+### Not claimed
+- Live VPS re-canary. ChatGPT AAX-12/AAX-15 live ACs stay checked; this is repository proof only.
+- Production SQL. Merge of PR #2 as deployed.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
 ## 2026-09-18 — AAX-15 in-repo failed-run outbox (distinct from AAX-12)
 
 **Session:** continue Phase 1 from fetched HEAD `1eabaad`. Greptile on that SHA: 5/5, 0 blocking issues. PR #2: 32 review threads, 0 unresolved.
