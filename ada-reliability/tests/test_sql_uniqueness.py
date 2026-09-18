@@ -57,6 +57,7 @@ def test_failed_run_outbox_is_distinct_from_agiflow_projection():
     assert "claim_generation INT NOT NULL DEFAULT 0" in text
     assert "AND lifecycle='inflight'" in text
     assert "AND claim_generation <=> ?" in text
+    assert "apply_if_claim" in text
     assert "DROP TABLE" not in text
     assert "CREATE TABLE IF NOT EXISTS jobs" not in text
     assert "CREATE TABLE IF NOT EXISTS schedules" not in text

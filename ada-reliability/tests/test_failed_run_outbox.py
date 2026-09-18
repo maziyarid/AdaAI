@@ -691,3 +691,126 @@ def test_requires_engine_does_not_burn_retry_budget():
     assert result["requires_engine"] == 1
     assert rec["attempt_count"] == before
     assert rec["lifecycle"] != LIFECYCLE_DEAD_LETTER
+
+
+def test_stale_engine_result_cannot_overwrite_fresh_claim():
+    """Greptile P1: delayed engine_retry must not unfence a newer claim.
+
+    Worker A is inside engine_retry past the pre-execution ownership check.
+    Lease expires. Worker B reclaims and succeeds. A's FAILED result must
+    return CONFLICT / stale_lease and leave B's succeeded row intact.
+    """
+    clock = Clock()
+    store = InMemoryFailedRunStore()
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def slow_fail(rec):
+        calls.append(rec.get("lease_owner") or "none")
+        entered.set()
+        assert release.wait(timeout=5)
+        return {"status": "FAILED"}
+
+    def fast_apply(rec):
+        calls.append(rec.get("lease_owner") or "none")
+        return {"status": "APPLIED"}
+
+    box_a = FailedRunOutbox(
+        store=store, clock=clock, lease_seconds=30, engine_retry=slow_fail,
+    )
+    box_b = FailedRunOutbox(
+        store=store, clock=clock, lease_seconds=30, engine_retry=fast_apply,
+    )
+    _fail(
+        box_a,
+        idempotency_key="fence-result",
+        mutation_kind="wordpress_mutation",
+        mutation_idempotency_key="mut-fence",
+    )
+    claimed_a = box_a.claim_batch(owner="worker-a")
+    assert len(claimed_a) == 1
+    stale_a = claimed_a[0]
+    gen_a = stale_a["claim_generation"]
+
+    stale_result: dict = {}
+
+    def run_a() -> None:
+        stale_result["r"] = box_a.replay_one(stale_a)
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert entered.wait(timeout=5)
+
+    clock.advance(seconds=31)
+    claimed_b = box_b.claim_batch(owner="worker-b")
+    assert len(claimed_b) == 1
+    fresh_b = claimed_b[0]
+    assert fresh_b["lease_owner"] == "worker-b"
+    assert fresh_b["claim_generation"] != gen_a
+    live = box_b.replay_one(fresh_b)
+    assert live["status"] == "SUCCEEDED"
+    assert store.get("fence-result")["lifecycle"] == LIFECYCLE_SUCCEEDED
+    assert store.mutation_seen("wordpress_mutation", "mut-fence") is True
+
+    release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert stale_result["r"]["status"] == "CONFLICT"
+    assert stale_result["r"]["reason"] == "stale_lease"
+    rec = store.get("fence-result")
+    assert rec["lifecycle"] == LIFECYCLE_SUCCEEDED
+    assert rec["lifecycle"] != LIFECYCLE_RETRYABLE
+    assert rec["lease_owner"] is None
+    assert rec["claim_generation"] == fresh_b["claim_generation"]
+    assert rec["attempt_count"] == 1
+    assert calls == ["worker-a", "worker-b"]
+
+
+def test_expired_unreclaimed_claim_can_still_commit():
+    """Expire without a new claim keeps generation; original worker may finish."""
+    clock = Clock()
+    store = InMemoryFailedRunStore()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_apply(rec):
+        entered.set()
+        assert release.wait(timeout=5)
+        return {"status": "APPLIED"}
+
+    box = FailedRunOutbox(
+        store=store, clock=clock, lease_seconds=30, engine_retry=slow_apply,
+    )
+    _fail(
+        box,
+        idempotency_key="expire-gap",
+        mutation_kind="wordpress_mutation",
+        mutation_idempotency_key="mut-gap",
+    )
+    claimed = box.claim_batch(owner="worker-a")
+    assert len(claimed) == 1
+    rec_a = claimed[0]
+    gen_a = rec_a["claim_generation"]
+
+    result: dict = {}
+
+    def run_a() -> None:
+        result["r"] = box.replay_one(rec_a)
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert entered.wait(timeout=5)
+    clock.advance(seconds=31)
+    expired = box._expire_lease(rec_a, clock())
+    assert expired["lifecycle"] == LIFECYCLE_RETRYABLE
+    assert expired["lease_owner"] is None
+    assert expired["claim_generation"] == gen_a
+    release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert result["r"]["status"] == "SUCCEEDED"
+    stored = store.get("expire-gap")
+    assert stored["lifecycle"] == LIFECYCLE_SUCCEEDED
+    assert stored["claim_generation"] == gen_a
+    assert store.mutation_seen("wordpress_mutation", "mut-gap") is True

@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (lease-expire CAS + retry budget at `2dd1ffb`). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo (lease-expire CAS + retry budget at `2dd1ffb`; result-write `apply_if_claim` fencing after Greptile 4/5 on `d3c8c34`). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 

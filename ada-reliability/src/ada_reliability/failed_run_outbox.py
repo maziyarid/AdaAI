@@ -183,6 +183,14 @@ class FailedRunStore(Protocol):
         expected_generation: Optional[int],
         now: datetime,
     ) -> Optional[dict]: ...
+    def apply_if_claim(
+        self,
+        rec_id: str,
+        *,
+        expected_generation: Optional[int],
+        rec: dict,
+        mutations: Optional[list[tuple[str, str]]] = None,
+    ) -> Optional[dict]: ...
     def dump(self) -> dict: ...
 
 
@@ -193,6 +201,9 @@ class InMemoryFailedRunStore:
     still queued/retryable and due. expire_lease_if_match is the matching CAS
     for reclaim: it succeeds only if the stored row still has the expected
     expired inflight lease (id, lifecycle, owner, until, generation).
+    apply_if_claim is the matching CAS for post-execution result writes:
+    succeed/park/requeue/dead-letter and mutation-ledger updates apply only
+    if claim_generation is still the generation that executed the retry.
     A threading.Lock makes those CAS operations atomic in-process; MariaDB
     must use UPDATE ... WHERE lifecycle / lease_owner / lease_until /
     claim_generation. An in-process mutex alone is not the production lock.
@@ -313,6 +324,45 @@ class InMemoryFailedRunStore:
             rec["next_retry_at"] = now.isoformat()
             return copy.deepcopy(rec)
 
+    def apply_if_claim(
+        self,
+        rec_id: str,
+        *,
+        expected_generation: Optional[int],
+        rec: dict,
+        mutations: Optional[list[tuple[str, str]]] = None,
+    ) -> Optional[dict]:
+        """CAS: persist a result only if this claim generation still owns the row.
+
+        MariaDB equivalent:
+          UPDATE ada_failed_runs
+             SET lifecycle=?, lease_owner=NULL, lease_until=NULL, ...
+           WHERE id=?
+             AND claim_generation <=> ?
+          (affected rows = 0 means another worker reclaimed this generation)
+
+        Mutation-ledger inserts belong in the same transaction as this UPDATE.
+        """
+        with self._lock:
+            key = self.by_id.get(rec_id)
+            if key is None:
+                return None
+            stored = self.rows.get(key)
+            if stored is None:
+                return None
+            if expected_generation is not None:
+                if int(stored.get("claim_generation") or 0) != int(expected_generation):
+                    return None
+            new = copy.deepcopy(rec)
+            new["id"] = stored["id"]
+            new["idempotency_key"] = stored["idempotency_key"]
+            new["claim_generation"] = stored.get("claim_generation") or 0
+            self.rows[key] = new
+            if mutations:
+                for kind, mut_key in mutations:
+                    self.mutations.add((kind, mut_key))
+            return copy.deepcopy(new)
+
     def dump(self) -> dict:
         with self._lock:
             return {
@@ -370,6 +420,16 @@ class UnavailableFailedRunStore:
         expected_until: Optional[str],
         expected_generation: Optional[int],
         now: datetime,
+    ) -> Optional[dict]:
+        raise AdaError("DURABLE_STORE_UNAVAILABLE", "failed-run store is down")
+
+    def apply_if_claim(
+        self,
+        rec_id: str,
+        *,
+        expected_generation: Optional[int],
+        rec: dict,
+        mutations: Optional[list[tuple[str, str]]] = None,
     ) -> Optional[dict]:
         raise AdaError("DURABLE_STORE_UNAVAILABLE", "failed-run store is down")
 
@@ -659,33 +719,36 @@ class FailedRunOutbox:
                 return {"status": "CONFLICT", "reason": "stale_lease"}
             if snapshot_gen is not None and int(rec.get("claim_generation") or 0) != int(snapshot_gen):
                 return {"status": "CONFLICT", "reason": "stale_lease"}
+        fence_gen = int(snapshot_gen if snapshot_gen is not None else rec.get("claim_generation") or 0)
         kind = rec.get("mutation_kind") or "none"
         key = rec.get("mutation_idempotency_key") or rec["idempotency_key"]
 
         if kind not in SUPPORTED_MUTATION_KINDS:
-            return self._park(rec, "UNKNOWN_MUTATION_KIND")
+            return self._park(rec, "UNKNOWN_MUTATION_KIND", fence_gen=fence_gen)
 
         if kind in PRODUCTION_MUTATION_KINDS:
             if self.store.mutation_seen(kind, key):
-                return self._succeed(rec, "duplicate_mutation_skipped", skipped=True)
+                return self._succeed(
+                    rec, "duplicate_mutation_skipped", skipped=True, fence_gen=fence_gen,
+                )
             if kind in ("wordpress_mutation", "packet_ack"):
                 if self.engine_retry is None:
-                    return self._requeue(rec, "REQUIRES_ENGINE")
+                    return self._requeue(rec, "REQUIRES_ENGINE", fence_gen=fence_gen)
                 try:
                     outcome = self.engine_retry(copy.deepcopy(rec))
                 except AdaError as err:
                     if err.code == "DURABLE_STORE_UNAVAILABLE":
-                        return self._requeue(rec, "UNAVAILABLE")
-                    return self._fail_attempt(rec, err.code)
+                        return self._requeue(rec, "UNAVAILABLE", fence_gen=fence_gen)
+                    return self._fail_attempt(rec, err.code, fence_gen=fence_gen)
                 return self._handle_engine_outcome(
-                    rec, outcome or {}, kind=kind, key=key,
+                    rec, outcome or {}, kind=kind, key=key, fence_gen=fence_gen,
                 )
 
             if kind.startswith("agiflow_"):
-                return self._handoff_agiflow(rec, kind, key)
+                return self._handoff_agiflow(rec, kind, key, fence_gen=fence_gen)
 
         if rec.get("failure_class") in QUEUED_CLASSES or kind == "agiflow_sync":
-            return self._handoff_agiflow(rec, "agiflow_sync", key)
+            return self._handoff_agiflow(rec, "agiflow_sync", key, fence_gen=fence_gen)
 
         # Transient non-mutation work: only an explicit engine success is
         # terminal. FAILED / EXECUTING / unknown results must not fall through
@@ -695,28 +758,37 @@ class FailedRunOutbox:
                 outcome = self.engine_retry(copy.deepcopy(rec))
             except AdaError as err:
                 if err.code == "DURABLE_STORE_UNAVAILABLE":
-                    return self._requeue(rec, "UNAVAILABLE")
-                return self._fail_attempt(rec, err.code)
+                    return self._requeue(rec, "UNAVAILABLE", fence_gen=fence_gen)
+                return self._fail_attempt(rec, err.code, fence_gen=fence_gen)
             return self._handle_engine_outcome(
-                rec, outcome or {}, kind=kind, key=key,
+                rec, outcome or {}, kind=kind, key=key, fence_gen=fence_gen,
             )
-        return self._succeed(rec, "replayed_without_mutation")
+        return self._succeed(rec, "replayed_without_mutation", fence_gen=fence_gen)
 
-    def _handoff_agiflow(self, rec: dict, kind: str, key: str) -> dict:
+    def _handoff_agiflow(
+        self, rec: dict, kind: str, key: str, *, fence_gen: Optional[int] = None,
+    ) -> dict:
         if self.store.mutation_seen(kind, key) or self.store.mutation_seen(
             "agiflow_comment", rec["sync_marker"],
         ):
-            return self._succeed(rec, "duplicate_agiflow_skipped", skipped=True)
+            return self._succeed(
+                rec, "duplicate_agiflow_skipped", skipped=True, fence_gen=fence_gen,
+            )
         if self.steward is None:
             rec["external_sync_state"] = "pending"
             rec["lifecycle"] = LIFECYCLE_QUEUED
             rec["lease_owner"] = None
             rec["lease_until"] = None
-            self.store.put(rec)
+            stored = self._write_result(
+                rec, fence_gen=fence_gen, event="pending_external_sync",
+                details={"reason": "no_steward"},
+            )
+            if stored is None:
+                return self._stale()
             return {"status": "QUEUED", "reason": "no_steward", "replay": REPLAY_QUEUED}
         job_id = rec.get("durable_job_id")
         if not job_id:
-            return self._park(rec, "missing_durable_job_id")
+            return self._park(rec, "missing_durable_job_id", fence_gen=fence_gen)
         evidence_id = (rec.get("payload") or {}).get("evidence_id")
         close_grant_id = (rec.get("payload") or {}).get("close_grant_id")
         try:
@@ -730,26 +802,31 @@ class FailedRunOutbox:
                 rec["lease_owner"] = None
                 rec["lease_until"] = None
                 rec["last_error"] = err.code
-                self.store.put(rec)
-                self.store.append_event(rec["id"], "pending_external_sync", {"code": err.code})
+                stored = self._write_result(
+                    rec, fence_gen=fence_gen, event="pending_external_sync",
+                    details={"code": err.code},
+                )
+                if stored is None:
+                    return self._stale()
                 return {"status": "QUEUED", "reason": err.code, "replay": REPLAY_QUEUED}
             if err.code in ("UNKNOWN_EVIDENCE", "FORGED_EVIDENCE", "FORGED_CLOSE_GRANT"):
-                return self._park(rec, err.code)
-            return self._fail_attempt(rec, err.code)
+                return self._park(rec, err.code, fence_gen=fence_gen)
+            return self._fail_attempt(rec, err.code, fence_gen=fence_gen)
         if result.get("status") == "PENDING_SYNC":
             rec["external_sync_state"] = "pending"
             rec["lifecycle"] = LIFECYCLE_QUEUED
             rec["lease_owner"] = None
             rec["lease_until"] = None
-            self.store.put(rec)
-            self.store.append_event(rec["id"], "pending_external_sync", result)
+            stored = self._write_result(
+                rec, fence_gen=fence_gen, event="pending_external_sync", details=result,
+            )
+            if stored is None:
+                return self._stale()
             return {"status": "QUEUED", "reason": "agiflow_unavailable", "replay": REPLAY_QUEUED}
         if result.get("status") == "CONFLICT":
             rec["external_sync_state"] = "conflict"
             rec["reset_condition"] = "human_agiflow_conflict_resolved"
-            return self._park(rec, "newer_human_edit")
-        self.store.mutation_record(kind, key)
-        self.store.mutation_record("agiflow_comment", rec["sync_marker"])
+            return self._park(rec, "newer_human_edit", fence_gen=fence_gen)
         rec["external_sync_state"] = "succeeded"
         rec["payload"] = {
             **(rec.get("payload") or {}),
@@ -757,7 +834,12 @@ class FailedRunOutbox:
             "agiflow_status": result.get("agiflow_status"),
             "comment_id": result.get("comment_id"),
         }
-        return self._succeed(rec, "agiflow_projected")
+        return self._succeed(
+            rec,
+            "agiflow_projected",
+            fence_gen=fence_gen,
+            mutations=[(kind, key), ("agiflow_comment", rec["sync_marker"])],
+        )
 
     def acknowledge_reset(self, idempotency_key: str, *, condition: str) -> dict:
         rec = self.store.get(idempotency_key)
@@ -790,19 +872,21 @@ class FailedRunOutbox:
 
     def _handle_engine_outcome(
         self, rec: dict, outcome: dict, *, kind: str, key: str,
+        fence_gen: Optional[int] = None,
     ) -> dict:
         status = (outcome or {}).get("status")
         if status in ENGINE_SUCCESS:
-            if kind in PRODUCTION_MUTATION_KINDS:
-                self.store.mutation_record(kind, key)
+            mutations = [(kind, key)] if kind in PRODUCTION_MUTATION_KINDS else None
             skipped = status == "DUPLICATE_SKIPPED"
             reason = "duplicate_mutation_skipped" if skipped else "engine_applied"
-            return self._succeed(rec, reason, skipped=skipped)
+            return self._succeed(
+                rec, reason, skipped=skipped, fence_gen=fence_gen, mutations=mutations,
+            )
         if status in ENGINE_CONSUMES_ATTEMPT:
-            return self._fail_attempt(rec, status)
+            return self._fail_attempt(rec, status, fence_gen=fence_gen)
         if status in ENGINE_RETRYABLE:
-            return self._requeue(rec, status)
-        return self._park(rec, f"UNKNOWN_ENGINE_STATUS:{status!s}")
+            return self._requeue(rec, status, fence_gen=fence_gen)
+        return self._park(rec, f"UNKNOWN_ENGINE_STATUS:{status!s}", fence_gen=fence_gen)
 
     def _expire_lease(self, rec: dict, now: datetime) -> dict:
         if rec["lifecycle"] != LIFECYCLE_INFLIGHT:
@@ -823,45 +907,92 @@ class FailedRunOutbox:
         self.store.append_event(stored["id"], "lease_expired", {})
         return stored
 
-    def _succeed(self, rec: dict, reason: str, *, skipped: bool = False) -> dict:
+    def _stale(self) -> dict:
+        return {"status": "CONFLICT", "reason": "stale_lease"}
+
+    def _write_result(
+        self,
+        rec: dict,
+        *,
+        fence_gen: Optional[int],
+        event: str,
+        details: dict,
+        mutations: Optional[list[tuple[str, str]]] = None,
+    ) -> Optional[dict]:
+        stored = self.store.apply_if_claim(
+            rec["id"],
+            expected_generation=int(
+                fence_gen if fence_gen is not None else rec.get("claim_generation") or 0
+            ),
+            rec=rec,
+            mutations=mutations,
+        )
+        if stored is None:
+            return None
+        self.store.append_event(stored["id"], event, details)
+        return stored
+
+    def _succeed(
+        self,
+        rec: dict,
+        reason: str,
+        *,
+        skipped: bool = False,
+        fence_gen: Optional[int] = None,
+        mutations: Optional[list[tuple[str, str]]] = None,
+    ) -> dict:
         rec["lifecycle"] = LIFECYCLE_SUCCEEDED
         rec["lease_owner"] = None
         rec["lease_until"] = None
         rec["next_retry_at"] = None
         if rec.get("external_sync_state") == "pending":
             rec["external_sync_state"] = "succeeded"
-        stored = self.store.put(rec)
-        self.store.append_event(stored["id"], "succeeded", {"reason": reason})
+        stored = self._write_result(
+            rec, fence_gen=fence_gen, event="succeeded",
+            details={"reason": reason}, mutations=mutations,
+        )
+        if stored is None:
+            return self._stale()
         return {
             "status": "DUPLICATE_SKIPPED" if skipped else "SUCCEEDED",
             "reason": reason,
             "idempotency_key": stored["idempotency_key"],
         }
 
-    def _park(self, rec: dict, reason: str) -> dict:
+    def _park(self, rec: dict, reason: str, *, fence_gen: Optional[int] = None) -> dict:
         rec["lifecycle"] = LIFECYCLE_PARKED
         rec["next_retry_at"] = None
         rec["lease_owner"] = None
         rec["lease_until"] = None
         rec["last_error"] = reason
-        stored = self.store.put(rec)
-        self.store.append_event(stored["id"], "parked", {"reason": reason})
+        stored = self._write_result(
+            rec, fence_gen=fence_gen, event="parked", details={"reason": reason},
+        )
+        if stored is None:
+            return self._stale()
         return {"status": "PARKED", "reason": reason, "replay": REPLAY_PARKED}
 
-    def _requeue(self, rec: dict, reason: str) -> dict:
+    def _requeue(self, rec: dict, reason: str, *, fence_gen: Optional[int] = None) -> dict:
         rec["lease_owner"] = None
         rec["lease_until"] = None
         rec["last_error"] = reason
         if int(rec.get("attempt_count") or 0) >= int(rec.get("max_attempts") or self.max_attempts):
             rec["lifecycle"] = LIFECYCLE_DEAD_LETTER
             rec["next_retry_at"] = None
-            stored = self.store.put(rec)
-            self.store.append_event(stored["id"], "dead_letter", {"reason": reason})
+            stored = self._write_result(
+                rec, fence_gen=fence_gen, event="dead_letter",
+                details={"reason": reason},
+            )
+            if stored is None:
+                return self._stale()
             return {"status": "DEAD_LETTER", "reason": reason}
         rec["lifecycle"] = LIFECYCLE_RETRYABLE if reason != "REQUIRES_ENGINE" else LIFECYCLE_QUEUED
         rec["next_retry_at"] = self.now().isoformat()
-        stored = self.store.put(rec)
-        self.store.append_event(stored["id"], "requeued", {"reason": reason})
+        stored = self._write_result(
+            rec, fence_gen=fence_gen, event="requeued", details={"reason": reason},
+        )
+        if stored is None:
+            return self._stale()
         if reason == "UNAVAILABLE":
             status = "UNAVAILABLE"
         elif reason == "REQUIRES_ENGINE":
@@ -870,9 +1001,9 @@ class FailedRunOutbox:
             status = "REQUEUED"
         return {"status": status, "reason": reason, "replay": REPLAY_RETRYABLE}
 
-    def _fail_attempt(self, rec: dict, reason: str) -> dict:
+    def _fail_attempt(self, rec: dict, reason: str, *, fence_gen: Optional[int] = None) -> dict:
         rec["attempt_count"] = int(rec.get("attempt_count") or 0) + 1
-        return self._requeue(rec, reason)
+        return self._requeue(rec, reason, fence_gen=fence_gen)
 
     def clickup_was_used(self) -> bool:
         return False

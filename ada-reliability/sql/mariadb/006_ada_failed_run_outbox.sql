@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS ada_failed_runs (
 --      AND (lease_until IS NULL OR lease_until <= ?)
 --      AND claim_generation <=> ?
 --   (affected rows = 0 means another worker already reclaimed)
+--
+-- Result transitions (succeed/park/requeue/dead-letter) and mutation-ledger
+-- writes are the same class of CAS. A delayed engine_retry must not overwrite
+-- a newer claim or completed state. MariaDB apply_if_claim:
+--   UPDATE ada_failed_runs
+--      SET lifecycle=?, lease_owner=NULL, lease_until=NULL, ...
+--    WHERE id=?
+--      AND claim_generation <=> ?
+--   (affected rows = 0 means another worker reclaimed this generation)
+-- Mutation-ledger inserts belong in the same transaction as this UPDATE.
 -- Do not apply this migration here; AAX-7 rehearsal only.
 
 CREATE TABLE IF NOT EXISTS ada_failed_run_events (
