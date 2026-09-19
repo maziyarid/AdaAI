@@ -1,5 +1,30 @@
 # CI status
 
+## 2026-09-19T07:15Z — runner_id=0 on a public repo (HEAD `d7e41a6`)
+
+`maziyarid/AdaAI` is **public**. This is not a private-minutes billing
+fail. Latest `ada-reliability` runs on `d7e41a6`:
+
+- pull_request run `35427532496` job `105855958119`
+- push run `35427530049`
+
+Both `conclusion=failure` in ~2–3 seconds. Job JSON:
+`runner_id=0`, `runner_name=""`, `runner_group_id=0`. Checkout /
+setup-python / pytest never ran. Local suite on this tree: **170
+passed** after the AAX-8/AAX-7 additions.
+
+Human check (do not rewrite Ada application code):
+
+1. GitHub → repo Settings → Actions → General: actions enabled,
+   "Allow all actions and reusable workflows", Ubuntu GitHub-hosted
+   runners allowed.
+2. Account Settings → Actions → General for `maziyarid`.
+3. Confirm no org/ruleset is blocking hosted runners.
+
+`mergeable_state=unstable` on PR #2 is this Actions signal. Greptile
+5/5 on `d7e41a6` is independent of it.
+
+
 Ada Context Core's pure contract tests currently pass locally: **7/7**, and `python -m compileall app mcp` succeeds.
 
 Phase-1 `ada-reliability` now has `.github/workflows/ada-reliability.yml`. Hosted Actions previously failed to start in this repository (`docs/CI.md` history below). If the new workflow is skipped by GitHub policy, the equivalent proof is a clean venv:

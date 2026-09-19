@@ -1,5 +1,35 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T07:15Z — AAX-8 in-repo shadow pipeline; AAX-7 source map
+
+**Fetched HEAD:** `d7e41a6c2d8fbf64e0e8de740f74bd77976ebb19` (unchanged until this push).
+Greptile **5/5** on that exact SHA. PR #2 open, not merged, `mergeable_state=unstable`.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `/usr/local/bin/ada-inspect`
+  still ENOENT. `readOnly` stayed on. Royadarman not used.
+- AAX-8 `ShadowPipeline`: binds live snapshot schedule identities,
+  asserts adapter has no write/lease/SQL surface, wraps
+  `shadow_mistral`, records evidence, STOP. No WordPress write,
+  no SQL, no second scheduler.
+- AAX-7 `docs/AAX7-SOURCE-VS-MIGRATION.md`: source-vs-migration
+  classification (already provided / complementary / overlapping /
+  still missing). **STOP before Apply.** 006 retained as complementary
+  only if live has no `pd_outbox`.
+- Local suite **170 passed** (161 baseline + 9 new). Imports
+  `AdaEngine` / `seed_phase1` / `FailedRunOutbox` / `ShadowPipeline`
+  OK. Zero placeholders. engine 71704 / outbox 40345 unchanged.
+
+### Not done
+- AAX-3 AC3 live `SHOW TABLES`.
+- Production SQL. Merge. Deploy. Live Mistral/Teznevise canary.
+- Hosted Actions still `runner_id=0` (public repo; not private minutes).
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T06:42Z — AAX-3 live source snapshot imported (AC2)
 
 **Fetched HEAD:** `cd7c63c0fb25ecdb7e1e9eebb4499797441bb6ff`.

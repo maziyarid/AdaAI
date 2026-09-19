@@ -15,3 +15,5 @@ Agiflow projection (`agiflow_steward.py`, AAX-12) is a coordination outbox. It d
 
 Failed-run recovery (`failed_run_outbox.py`, AAX-15) is a **separate** execution outbox. It retains failed/blocked scheduled runs for bounded idempotent replay. It is not a scheduler and must not apply WordPress or packet mutations. `replay=UNAVAILABLE` if persist fails.
 
+Shadow integration (`shadow_pipeline.py`, AAX-8) binds live control-core snapshot schedule identities and runs `AdaEngine.shadow_mistral`. It records evidence and STOP. It must not write WordPress, apply SQL, or create a second scheduler/lease authority. Live Mistral proposals remain a later canary.
+

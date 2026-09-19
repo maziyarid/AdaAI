@@ -1,8 +1,11 @@
 # Least-privilege mazcontrol read-only inspection (AAX-3)
 
-This is the smallest extra access Ada needs to finish AAX-3 AC2/AC3
+This is the smallest extra access Ada needs to finish AAX-3 AC3
 and AAX-7 source-vs-live reconciliation. It is **not** installed on
-the VPS yet. Do not treat this document as live evidence.
+the VPS yet. Last live check 2026-09-19T07:10Z on
+`grok-ada-readonly` / `server.maziyarid.com`:
+`ls /usr/local/bin/ada-inspect` → ENOENT. Do not treat this
+document as live evidence.
 
 `grok-ada-readonly` (`mistralops`, MCP `readOnly=true`) already
 reaches `/opt/maziyar-control-core` and can `ls` / `cat` / `grep` /
