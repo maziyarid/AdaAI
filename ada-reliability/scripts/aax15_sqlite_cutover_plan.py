@@ -177,6 +177,20 @@ def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) ->
             "job binding supplied for unknown stable_id(s): " + ",".join(unknown_bindings)
         )
 
+    for row in outbox:
+        stable_id = str(row["stable_id"])
+        explicit = str(job_bindings.get(stable_id) or "").strip()
+        payload_job = str(parse_payload(row.get("payload_json")).get("durable_job_id") or "").strip()
+        if explicit and payload_job and explicit != payload_job:
+            raise CutoverError(
+                "conflicting durable job binding for "
+                + stable_id
+                + ": payload="
+                + payload_job
+                + " explicit="
+                + explicit
+            )
+
     mapped = [map_outbox_row(r, job_bindings) for r in outbox]
     missing_job_bindings = sorted(
         row["sync_marker"]

@@ -6,7 +6,7 @@ StartLimitBurst=3
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/systemctl try-restart maziyar-portfolio-dispatcher.service
+ExecStart=/usr/bin/systemctl restart maziyar-portfolio-dispatcher.service
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

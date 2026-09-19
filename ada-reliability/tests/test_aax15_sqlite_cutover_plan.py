@@ -132,3 +132,21 @@ def test_unknown_job_binding_is_refused(tmp_path):
         assert "unknown stable_id" in str(exc)
     else:
         raise AssertionError("unknown binding must be refused")
+
+
+def test_conflicting_payload_and_explicit_job_binding_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    c = sqlite3.connect(db)
+    c.execute(
+        "UPDATE pd_outbox SET payload_json=? WHERE stable_id='stable-2'",
+        ('{"content":"x","durable_job_id":"job-from-payload"}',),
+    )
+    c.commit()
+    c.close()
+    try:
+        cutover.build_plan(db, {"stable-2": "different-job"})
+    except cutover.CutoverError as exc:
+        assert "conflicting durable job binding" in str(exc)
+        assert "stable-2" in str(exc)
+    else:
+        raise AssertionError("conflicting durable job bindings must be refused")

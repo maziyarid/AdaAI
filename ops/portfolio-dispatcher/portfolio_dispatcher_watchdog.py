@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 COMPONENT = "portfolio-dispatcher-01"
+MAX_FUTURE_SKEW_SECONDS = 30
 
 
 class WatchdogError(RuntimeError):
@@ -38,10 +39,13 @@ def inspect(
     *,
     component: str = COMPONENT,
     max_heartbeat_age: int = 180,
+    max_future_skew: int = MAX_FUTURE_SKEW_SECONDS,
     now_epoch: float | None = None,
 ) -> dict[str, Any]:
     if max_heartbeat_age < 30:
         raise WatchdogError("max heartbeat age must be >= 30 seconds")
+    if max_future_skew < 0:
+        raise WatchdogError("max future skew must be >= 0 seconds")
     if not sqlite_path.is_file():
         return {"status": "blocked", "restart_recommended": False,
                 "reason": "state_db_missing", "sqlite": str(sqlite_path)}
@@ -85,6 +89,20 @@ def inspect(
         return {**common, "status": "unhealthy", "restart_recommended": True,
                 "reason": "heartbeat_invalid", "heartbeat_at": hb["heartbeat_at"]}
 
+    future_by = hb_epoch - now
+    if future_by > max_future_skew:
+        return {
+            "status": "unhealthy",
+            "restart_recommended": True,
+            "reason": "heartbeat_future",
+            "component": component,
+            "heartbeat_at": hb["heartbeat_at"],
+            "heartbeat_future_seconds": round(future_by, 3),
+            "max_future_skew_seconds": max_future_skew,
+            "stale_leases": stale_leases,
+            "open_circuits": open_circuits,
+        }
+
     age = max(0.0, now - hb_epoch)
     try:
         state_json = json.loads(hb["state_json"] or "{}")
@@ -112,6 +130,7 @@ def main() -> int:
     ap.add_argument("--sqlite", required=True, type=Path)
     ap.add_argument("--component", default=COMPONENT)
     ap.add_argument("--max-heartbeat-age", type=int, default=180)
+    ap.add_argument("--max-future-skew", type=int, default=MAX_FUTURE_SKEW_SECONDS)
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
     try:

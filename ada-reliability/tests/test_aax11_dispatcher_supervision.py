@@ -115,4 +115,24 @@ def test_staged_service_forces_observation_only_and_rate_limits_restart():
     assert "OnUnitActiveSec=2min" in timer
     assert "StartLimitIntervalSec=3600" in recovery
     assert "StartLimitBurst=3" in recovery
-    assert "try-restart maziyar-portfolio-dispatcher.service" in recovery
+    assert "systemctl restart maziyar-portfolio-dispatcher.service" in recovery
+    assert "try-restart maziyar-portfolio-dispatcher.service" not in recovery
+
+
+def test_materially_future_heartbeat_requests_recovery(tmp_path):
+    now = 2_000_000_000.0
+    hb = datetime.fromtimestamp(now + 31, tz=timezone.utc).isoformat()
+    db = make_db(tmp_path / "factory.sqlite3", hb)
+    result = watchdog.inspect(db, now_epoch=now, max_heartbeat_age=180, max_future_skew=30)
+    assert result["status"] == "unhealthy"
+    assert result["reason"] == "heartbeat_future"
+    assert result["restart_recommended"] is True
+
+
+def test_small_future_clock_skew_is_tolerated(tmp_path):
+    now = 2_000_000_000.0
+    hb = datetime.fromtimestamp(now + 10, tz=timezone.utc).isoformat()
+    db = make_db(tmp_path / "factory.sqlite3", hb)
+    result = watchdog.inspect(db, now_epoch=now, max_heartbeat_age=180, max_future_skew=30)
+    assert result["status"] == "healthy"
+    assert result["restart_recommended"] is False
