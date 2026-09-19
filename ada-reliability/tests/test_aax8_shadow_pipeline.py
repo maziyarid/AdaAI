@@ -320,3 +320,178 @@ def test_tampered_evaluation_verdict_fails_verify():
     assert pipe.verify_evidence(extra) is False
     # original remains authentic
     assert pipe.verify_evidence(sealed)
+
+
+def test_live_schedule_binding_is_snapshot_identity_not_mistral_job():
+    e = fresh()
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    bind = trace["live_schedule_binding"]
+    assert bind["stable_id"] == "schedule:seo-scout"
+    assert bind["agent"] == "SEO_SCOUT"
+    assert bind["job_type"] == "seo_scout.run"
+    assert bind["interval_seconds"] == 3600
+    assert bind["live_mistral_job"] is False
+    assert "control_core.py" in bind["source"]
+    assert trace["site_id"] == "teznevise.ir"
+    assert trace["stage"] == "EVALUATE"
+    assert pipe.verify_evidence(trace)
+
+
+def test_shadow_postcondition_not_proven_when_never_applied():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert trace["authorization"]["decision"] == "ALLOW"
+    proof = pipe.prove_postcondition(trace)
+    assert proof["stage"] == "POSTCONDITION"
+    assert proof["mode"] == "SHADOW"
+    assert proof["mutated"] is False
+    assert proof["production_mutation"] is False
+    assert proof["production_sql"] is False
+    assert proof["postcondition_proven"] is False
+    assert proof["task_completed"] is False
+    assert proof["task_state"] == "SHADOW"
+    assert proof["rollback"]["executed"] is False
+    assert proof["rollback"]["required"] is False
+    assert proof["rollback"]["reason"] == "shadow_never_applied"
+    assert "meta.yoast_title" in proof["adaeval"]["validation_failures"]
+    assert proof["parent_evidence_hmac"] == trace["evidence_hmac"]
+    assert e.wp.writes == writes
+    live = e.wp.read("teznevise.ir", "42")
+    assert live.meta["yoast_title"] == "خدمات نگارش"
+    assert e.tasks[trace["task_id"]]["state"] == "SHADOW"
+    assert pipe.verify_evidence(proof)
+    body = unsigned_evidence(proof)
+    for key in (
+        "adaeval",
+        "expected_postcondition",
+        "postcondition_proven",
+        "rollback",
+        "parent_evidence_hmac",
+        "evidence_alg",
+        "evidence_key_id",
+    ):
+        assert key in body
+
+
+def test_shadow_postcondition_does_not_complete_even_if_live_already_matches():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    matching = {
+        "tool": "wp_update_metadata",
+        "mutation_type": "METADATA_UPDATE",
+        "payload": {
+            "resource_id": "42",
+            "meta": {"yoast_title": "خدمات نگارش"},
+        },
+        "confidence": 0.99,
+    }
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=matching,
+        live_schedule_stable_id="schedule:blackout-sentinel",
+    )
+    proof = pipe.prove_postcondition(trace)
+    assert proof["postcondition_proven"] is True
+    assert proof["task_completed"] is False
+    assert proof["task_state"] == "SHADOW"
+    assert proof["rollback"]["executed"] is False
+    assert e.wp.writes == writes
+    assert e.tasks[trace["task_id"]]["state"] != "COMPLETED"
+    assert pipe.verify_evidence(proof)
+
+
+def test_unauthenticated_trace_cannot_prove_postcondition():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    sealed = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    forged = deepcopy(sealed)
+    forged["adaeval"] = dict(forged["adaeval"])
+    forged["adaeval"]["target_correctness"] = not forged["adaeval"]["target_correctness"]
+    forged["expected_postcondition"] = dict(forged["expected_postcondition"])
+    forged["expected_postcondition"]["http_status"] = 500
+    # HMAC no longer matches after tamper
+    assert pipe.verify_evidence(forged) is False
+    proof = pipe.prove_postcondition(forged)
+    assert proof["postcondition_proven"] is False
+    assert proof["authorization"]["reason"] == "unauthenticated_evidence"
+    assert proof["rollback"]["executed"] is False
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(proof)
+
+
+def test_shadow_rollback_is_recorded_not_executed():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    proof = pipe.prove_postcondition(trace)
+    rb = pipe.rollback(proof)
+    assert rb["stage"] == "ROLLBACK"
+    assert rb["mutated"] is False
+    assert rb["production_mutation"] is False
+    assert rb["rollback"]["executed"] is False
+    assert rb["authorization"]["reason"] == "shadow_forbids_production_rollback"
+    assert e.wp.writes == writes
+    live = e.wp.read("teznevise.ir", "42")
+    assert live.meta["yoast_title"] == "خدمات نگارش"
+    assert not hasattr(pipe, "apply_authorized_mutation")
+    assert pipe.verify_evidence(rb)
+    tampered = deepcopy(rb)
+    tampered["rollback"] = dict(tampered["rollback"])
+    tampered["rollback"]["executed"] = True
+    assert pipe.verify_evidence(tampered) is False
+
+
+def test_unknown_schedule_postcondition_is_not_proven():
+    e = fresh()
+    pipe = ShadowPipeline(e)
+    deny = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:invented-second-scheduler",
+    )
+    assert deny["live_schedule_binding"] is None
+    proof = pipe.prove_postcondition(deny)
+    assert proof["postcondition_proven"] is False
+    assert proof["task_completed"] is False
+    assert "missing_postcondition_target" in proof["adaeval"]["validation_failures"]
+    assert pipe.verify_evidence(proof)

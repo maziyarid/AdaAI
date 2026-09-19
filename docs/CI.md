@@ -1,5 +1,21 @@
 # CI status
 
+## 2026-09-19T08:10Z — runner still unassigned on `58e64c7`
+
+`maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
+`58e64c788bbea747251a82c4d5a8c68bd15a7cda`:
+
+- pull_request run `35430640282` job `105864455803` (~2s, `conclusion=failure`)
+- Job JSON: `runner_id=0`, `runner_name=""`, `runner_group_id=0`
+
+Checkout / setup-python / pytest never ran. This is Actions
+provisioning, not a test failure. Do not rewrite Ada application code
+for `runner_id=0`. Human check remains Settings → Actions (repo +
+account) and org/rulesets.
+
+Local suite on this tree is the proof.
+
+
 ## 2026-09-19T07:50Z — runner still unassigned on `1a1c995`
 
 `maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on

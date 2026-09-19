@@ -1,5 +1,31 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T08:15Z — AAX-8 independent postcondition/rollback evidence (in-repo)
+
+**Fetched HEAD:** `58e64c788bbea747251a82c4d5a8c68bd15a7cda`.
+Greptile independently reviewed that SHA at **5/5** (PR body last
+reviewed commit matches HEAD). Prior HMAC P1 closed. No new P0/P1.
+PR #2 open, not merged, `mergeable_state=unstable`.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `/usr/local/bin/ada-inspect`
+  still ENOENT. `readOnly` stayed on. Royadarman not used. AAX-3 AC3
+  still open. Close AC3 only from live `SHOW TABLES`.
+- AAX-8: `prove_postcondition` HMAC-verifies the evaluate record first,
+  independently checks expected vs FakeWordPress live, and never
+  completes the task. `rollback` records a DENY plan and never
+  executes a production rollback. Snapshot schedule binding is
+  labelled `live_mistral_job=false`. Local suite **180 passed**.
+- Hosted Actions on `58e64c7` still fail in ~2s (`runner_id=0`).
+  Do not rewrite app code for this.
+- SQL not applied. AAX-8 AC1/AC3/AC4 remain unchecked (no live
+  Mistral / live postcondition canary). AAX-12/AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T08:00Z — AAX-8 HMAC covers the full evaluation record
 
 **Fetched HEAD:** `1a1c995f87978f0c1d00dea6954a4792debea0d2`.
