@@ -1,5 +1,40 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T09:20Z — Greptile 5/5 on 797bc3f; isolated MariaDB rehearsal
+
+**Fetched HEAD:** `797bc3ff10417a7c7f696fdb0f42b9e144754719` (matches origin).
+Greptile independently reviewed that SHA at **5/5** (check
+`105872277622`, completed 09:05:49Z, conclusion success). PR body
+last-reviewed commit is this SHA. 0 P0/P1. Do not add more
+repository-only AAX-8 unit tests.
+
+### Live evidence this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `control_core.py` 65370 bytes.
+  `ls /usr/local/bin/ada-inspect` → ENOENT. `sudo -n -u mazcontrol
+  /usr/local/bin/ada-inspect tables` → POLICY_DENIED (`readOnly`
+  stayed on). Royadarman not used. AAX-3 AC3 still open.
+- AAX-7: **real isolated MariaDB 10.11.11** rehearsal, skip-networking
+  unix socket, not production. Live source SCHEMA + seed, `001`–`006`
+  apply twice, unique/idempotency 1062, CAS claim_generation, 28
+  `ada_*`, protected jobs/schedules unchanged, rollback restored the
+  20-table baseline. Quoted reserved `` `release` `` in 002/004.
+  Report: `docs/AAX7-ISOLATED-MARIADB-REHEARSAL.json`.
+- AAX-8: no genuine Mistral participation this cycle. No WP write.
+  `live_mistral_job` remains false. AC1/AC3/AC4 stay OPEN.
+- Local suite **209 passed**. Critical files unchanged
+  (engine 71704, outbox 40345).
+- CI on `797bc3f`: pytest jobs `105872274489` / `105872266095`,
+  `runner_id=0`, ~2s. Do not rewrite app code.
+
+### Not claimed
+- Live `SHOW TABLES`. Production SQL. Merge of PR #2. Live Mistral.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
+
 ## 2026-09-19T09:10Z — Greptile 5/5 on 5d331d7; AAX-8 wrapper/escalation proofs
 
 **Fetched HEAD:** `5d331d736c44849c1dd2a0ad11bfed46dc911307`.

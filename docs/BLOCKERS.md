@@ -1,6 +1,6 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox + AAX-8 in-repo shadow pipeline (HMAC covers the full evidence record except `evidence_hmac`; bound `live_job_id` never grants production mutation families; unauthorised networked adapter reads fail closed without HTTP, including hostname aliases, ControlCoreAdapter subclasses, and wrappers; path/URL job ids never reach GET /jobs/{id}; independent postcondition/rollback stages do not apply, complete, or journal a write intent; optional read-only `adapter.get_job` binds secret-free job shape and never claims live Mistral). Live `control_core.py` imported 2026-09-19T06:42Z (65370 bytes, sha256 of captured bytes `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`). AAX-7 isolated inventory rehearsal of `001`–`006` is in-memory only (protected jobs/schedules unchanged; not SHOW TABLES). mazcontrol read-only helper is in-repo, not installed (`ada-inspect` ENOENT 2026-09-19T09:10Z). Production SQL not applied. Live MariaDB `SHOW TABLES` and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox + AAX-8 in-repo shadow pipeline (HMAC covers the full evidence record except `evidence_hmac`; bound `live_job_id` never grants production mutation families; unauthorised networked adapter reads fail closed without HTTP, including hostname aliases, ControlCoreAdapter subclasses, and wrappers; path/URL job ids never reach GET /jobs/{id}; independent postcondition/rollback stages do not apply, complete, or journal a write intent; optional read-only `adapter.get_job` binds secret-free job shape and never claims live Mistral). Live `control_core.py` imported 2026-09-19T06:42Z (65370 bytes, sha256 of captured bytes `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`). AAX-7 isolated **MariaDB** rehearsal of `001`–`006` ran on disposable skip-networking 10.11.11 (protected jobs/schedules unchanged; rollback restored baseline; not VPS SHOW TABLES). mazcontrol read-only helper is in-repo, not installed (`ada-inspect` ENOENT 2026-09-19T09:14Z). Production SQL not applied. Live MariaDB `SHOW TABLES` and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 
@@ -40,7 +40,7 @@ Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushe
 
 ## Non-blockers (done)
 
-- Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied. Includes `005_ada_agiflow_projection.sql` and `006_ada_failed_run_outbox.sql`.
+- Additive MariaDB `ada_*` SQL written, dialect-reviewed, **isolated skip-networking rehearsal passed** (10.11.11; not applied to production). Includes `005_ada_agiflow_projection.sql` and `006_ada_failed_run_outbox.sql`. `release` is quoted as a reserved word.
 - `path_hash` uniqueness and one-ACTIVE release constraint in SQL.
 - Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR **and** the imported live source snapshot.
 - HMAC receipts carry `signature_alg` + `key_id`.

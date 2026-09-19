@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS ada_qalam_assets (
   component VARCHAR(64) NOT NULL,
-  release VARCHAR(64) NOT NULL,
+  `release` VARCHAR(64) NOT NULL,
   path VARCHAR(512) NOT NULL,
   -- Collision-safe identity for paths up to 512 chars. Do not unique-index path(191).
   -- Writers must set path_hash = SHA2(path, 256) of the full path.
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS ada_qalam_assets (
   status VARCHAR(32) NOT NULL,
   site_id VARCHAR(191) NULL,
   bytes INT NOT NULL,
-  PRIMARY KEY (component, release, path_hash),
+  PRIMARY KEY (component, `release`, path_hash),
   KEY idx_ada_qalam_path_prefix (path(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

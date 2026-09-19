@@ -2,10 +2,11 @@
 
 This is the smallest extra access Ada needs to finish AAX-3 AC3
 and AAX-7 source-vs-live reconciliation. It is **not** installed on
-the VPS yet. Last live check 2026-09-19T07:10Z on
+the VPS yet. Last live check 2026-09-19T09:14Z on
 `grok-ada-readonly` / `server.maziyarid.com`:
-`ls /usr/local/bin/ada-inspect` → ENOENT. Do not treat this
-document as live evidence.
+`ls /usr/local/bin/ada-inspect` → ENOENT. `sudo -n -u mazcontrol
+/usr/local/bin/ada-inspect tables` → POLICY_DENIED while `readOnly=true`.
+Do not treat this document as live table evidence.
 
 `grok-ada-readonly` (`mistralops`, MCP `readOnly=true`) already
 reaches `/opt/maziyar-control-core` and can `ls` / `cat` / `grep` /

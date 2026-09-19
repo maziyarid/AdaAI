@@ -7,7 +7,7 @@ SQL = Path(__file__).resolve().parents[1] / "sql" / "mariadb"
 def test_qalam_assets_use_path_hash_not_prefix_unique():
     text = (SQL / "004_ada_qalam_eval.sql").read_text(encoding="utf-8")
     assert "path_hash CHAR(64) NOT NULL" in text
-    assert "PRIMARY KEY (component, release, path_hash)" in text
+    assert "PRIMARY KEY (component, `release`, path_hash)" in text
     assert "PRIMARY KEY (component, release, path(191))" not in text
 
 

@@ -3,6 +3,8 @@
 Captured 2026-09-19T07:05Z against PR head `d7e41a6`.
 Isolated inventory rehearsal added 2026-09-19T09:00Z against
 `27ffc51` source + repo SQL (in-memory table names only).
+Isolated **MariaDB** rehearsal added 2026-09-19T09:16Z (disposable
+skip-networking 10.11.11 instance; not VPS SHOW TABLES).
 
 This is **live source schema** from
 `runtime/control-core-baseline/live/control_core.py` (65370 bytes).
@@ -35,6 +37,44 @@ inventory:
 
 This rehearsal does **not** execute SQL, does **not** open MariaDB,
 and does **not** satisfy AAX-3 AC3.
+
+## Isolated MariaDB rehearsal (not production)
+
+Executed 2026-09-19T09:16Z on a disposable MariaDB **10.11.11**
+instance started with `--skip-networking`, unix socket under `/tmp`,
+port 0. Driver: `ada-reliability/scripts/isolated_mariadb_rehearsal.py`.
+Evidence JSON: `docs/AAX7-ISOLATED-MARIADB-REHEARSAL.json`.
+
+This is **not** `server.maziyarid.com`. This is **not** `maziyar_control`.
+`skip_networking=ON` was required before any SQL. Production env files
+were not read.
+
+Proven on this isolated schema:
+
+1. Pre-migration checkpoint: 20 live-source tables, protected CREATE
+   SQL sha256, jobs/schedules/pending_external_sync row counts.
+2. Migrations `001`–`006` applied in order, then re-applied
+   (`IF NOT EXISTS` / `INSERT IGNORE` idempotent).
+3. MariaDB syntax: `release` is reserved; `002` / `004` now quote
+   `` `release` ``. Unquoted form is not MariaDB-safe.
+4. Unique constraints: duplicate `jobs.idempotency_key` → 1062;
+   one-ACTIVE `ada_policy_releases` → 1062;
+   `ada_failed_runs.idempotency_key` → 1062.
+5. Lease/CAS: first `claim_generation` UPDATE row_count=1;
+   stale generation 0 after claim row_count=0.
+6. Protected CREATE SQL and job/schedule/sync row counts unchanged
+   after apply.
+7. 28 `ada_*` tables created; none existed before apply.
+8. Rollback dropped only `ada_*`; baseline 20-table set restored;
+   protected CREATE hashes matched the checkpoint.
+9. Isolated database dropped at end. Production SQL: **NONE**.
+
+Not proven by this rehearsal:
+
+- live VPS `SHOW TABLES` / `pd_*` presence (AAX-3 AC3)
+- encrypted production backup + restore drill
+- live control-core Python claim/lease loop against post-migration schema
+- production Apply
 
 ## Responsibility map
 
