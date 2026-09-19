@@ -62,11 +62,21 @@ FORBIDDEN_ADAPTER_ATTRS = (
     "wp_publish",
 )
 
+# Repository shadow must not GET live control-core unless a canary is authorised.
+LIVE_CONTROL_CORE_URL_MARKERS = ("127.0.0.1:8770", "localhost:8770")
+
 
 def assert_adapter_is_read_only(adapter: Any) -> None:
     for name in FORBIDDEN_ADAPTER_ATTRS:
         if hasattr(adapter, name):
             raise AdaError("SHADOW_ADAPTER_WRITES", name)
+
+
+def adapter_targets_live_control_core(adapter: Any) -> bool:
+    """True when the adapter would talk to the live loopback control-core."""
+    cfg = getattr(adapter, "config", None)
+    base = str(getattr(cfg, "base_url", "") or "")
+    return any(marker in base for marker in LIVE_CONTROL_CORE_URL_MARKERS)
 
 
 def unsigned_evidence(record: dict[str, Any]) -> dict[str, Any]:
@@ -126,9 +136,15 @@ class ShadowPipeline:
     rollback.
     """
 
-    def __init__(self, engine: AdaEngine, adapter: Optional[Any] = None):
+    def __init__(
+        self,
+        engine: AdaEngine,
+        adapter: Optional[Any] = None,
+        allow_live_job_read: bool = False,
+    ):
         self.engine = engine
         self.adapter = adapter
+        self.allow_live_job_read = bool(allow_live_job_read)
         self.evidence: list[dict[str, Any]] = []
         if adapter is not None:
             assert_adapter_is_read_only(adapter)
@@ -195,6 +211,32 @@ class ShadowPipeline:
                         "zwnj_fail": False,
                         "adaeval": {
                             "validation_failures": ["missing_read_adapter"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
+            if (
+                not self.allow_live_job_read
+                and adapter_targets_live_control_core(self.adapter)
+            ):
+                # Fail closed before GET /jobs/{id}. Repository tests use fakes.
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "live_adapter_read_not_authorised",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["live_adapter_read_not_authorised"],
                             "target_correctness": False,
                         },
                     }

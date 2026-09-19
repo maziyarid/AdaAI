@@ -30,6 +30,11 @@ schema-only MariaDB read.
 
 Do **not** run the Apply section until this stop is complete.
 
+An isolated **inventory** rehearsal of `001`–`006` exists in
+`ada-reliability/tests/test_aax7_isolated_rehearsal.py`. It mutates an
+in-memory table-name set only. It is not MariaDB, not `SHOW TABLES`,
+and not production Apply.
+
 ### Already in live control-core source
 
 `schema_migrations`, `agent_events`, `canonical_tasks`, `jobs`,

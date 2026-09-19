@@ -1,5 +1,39 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T09:05Z — AAX-7 isolated inventory rehearsal + AAX-8 live-adapter deny
+
+**Fetched HEAD:** `27ffc513ef7e9bb68fa7dd988210049646f930d0`.
+Greptile independently reviewed that SHA at **5/5** (check completed
+08:33:25Z, check `105868399364`). No new P0/P1. Parent `d7537ca` was
+also 5/5. PR #2 open, not merged, `mergeable_state=unstable`.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `/usr/local/bin/ada-inspect`
+  still ENOENT. `readOnly` stayed on. Royadarman not used. AAX-3 AC3
+  still open. Close AC3 only from live `SHOW TABLES`.
+- AAX-7: in-memory inventory rehearsal of `001`–`006` against the live
+  source table set. 20 protected control-core tables unchanged; only
+  `ada_*` names added; rollback restores the starting set. No MariaDB
+  connection. No production SQL. Responsibility map now covers
+  persistence, failure records, leases, claim generation, retry,
+  idempotency, dead-letter, quarantine, external sync, Agiflow handoff.
+  `006` comments no longer claim live `pd_*` tables exist.
+- AAX-8: unauthorised `ControlCoreAdapter` `live_job_id` reads fail
+  closed (`live_adapter_read_not_authorised`) without HTTP. Write-capable
+  adapters with `get_job` still rejected. Fake-adapter `wp_publish`
+  denial from `27ffc51` unchanged.
+- Do **not** check AAX-8 AC1/AC3/AC4. Do **not** check AAX-7 ACs.
+- Hosted Actions on `27ffc51`: `runner_id=0`, ~2s, pytest never
+  started (jobs `105868392628` / `105868388833`). Do not rewrite app
+  code for this.
+- SQL not applied. AAX-12/AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
+
 ## 2026-09-19T08:40Z — AAX-8 bound job id does not grant wp_publish
 
 **Fetched HEAD:** `d7537cada013e278552354411ac09707562ec30d`.

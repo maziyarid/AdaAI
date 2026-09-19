@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 import sys
 
 import pytest
@@ -18,6 +19,7 @@ from ada_reliability.shadow_pipeline import (
     LIVE_SEEDED_SCHEDULES,
     LIVE_SOURCE,
     ShadowPipeline,
+    adapter_targets_live_control_core,
     assert_adapter_is_read_only,
     live_job_context,
     unsigned_evidence,
@@ -759,3 +761,62 @@ def test_bound_live_job_id_does_not_grant_wp_publish():
     assert rb["production_mutation"] is False
     assert e.wp.writes == writes
     assert pipe.verify_evidence(rb)
+
+
+def test_write_capable_get_job_adapter_is_rejected():
+    class Bad(_ReadAdapter):
+        def enqueue(self, *_a, **_k):
+            raise AssertionError("enqueue must never run")
+
+    e = fresh()
+    with pytest.raises(AdaError) as ei:
+        ShadowPipeline(e, adapter=Bad({"job-1": MISTRAL_JOB}))
+    assert ei.value.code == "SHADOW_ADAPTER_WRITES"
+    assert e.wp.writes == 0
+
+
+def test_unauthorised_live_adapter_job_read_is_denied_without_http():
+    e = fresh()
+    writes = e.wp.writes
+    adapter = ControlCoreAdapter()
+    assert adapter_targets_live_control_core(adapter) is True
+    pipe = ShadowPipeline(e, adapter=adapter)
+    with patch("adapter.urlopen", side_effect=AssertionError("live HTTP forbidden")):
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id="job-1",
+        )
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "live_adapter_read_not_authorised"
+    assert trace["mutated"] is False
+    assert trace["production_mutation"] is False
+    assert trace["production_sql"] is False
+    assert trace["live_mistral_job"] is False
+    assert trace["mistral_participated"] is False
+    assert trace["live_job_context"] is None
+    assert set(e.tasks) == set()
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_shadow_evaluate_does_not_call_live_control_core_http():
+    e = fresh()
+    writes = e.wp.writes
+    with patch("adapter.urlopen", side_effect=AssertionError("live HTTP forbidden")):
+        pipe = ShadowPipeline(e, adapter=ControlCoreAdapter())
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_schedule_stable_id="schedule:seo-scout",
+        )
+    assert trace["authorization"]["decision"] == "ALLOW"
+    assert trace["live_job_id"] is None
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)

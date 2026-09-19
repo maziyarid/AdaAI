@@ -1,5 +1,25 @@
 # CI status
 
+## 2026-09-19T09:05Z — runner still unassigned on `27ffc51`
+
+`maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
+`27ffc513ef7e9bb68fa7dd988210049646f930d0`:
+
+- pull_request run `35432088239` job `105868392628` (~2s, `conclusion=failure`)
+- push run `35432086653` job `105868388833` (~2s, `conclusion=failure`)
+- Job JSON: `runner_id=0`, `runner_name=""`, `runner_group_id=0`
+- Greptile Review check `105868399364` on the same SHA: **success**
+  (completed 08:33:25Z, independent 5/5)
+
+Checkout / setup-python / pytest never ran. This is Actions
+provisioning, not a test failure. Do not rewrite Ada application code
+for `runner_id=0`. Human check remains account Actions / billing /
+abuse.
+
+Local suite on this tree is the proof.
+
+
+
 ## 2026-09-19T08:40Z — runner still unassigned on `d7537ca`
 
 `maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on

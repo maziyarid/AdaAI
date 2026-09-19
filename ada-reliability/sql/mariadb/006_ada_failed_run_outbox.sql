@@ -3,8 +3,9 @@
 -- Does not create jobs, schedules or leases. Not a second scheduler.
 -- Do not apply to production without the migration runbook and approval.
 --
--- Live VPS currently records some of this in pd_worker_runs / pd_outbox.
--- Reconcile names at AAX-7 apply time. Do not run two runtime outboxes.
+-- Live VPS may record overlapping recovery in pd_worker_runs / pd_outbox.
+-- Those names are not in control_core.py. Confirm with ada-inspect tables
+-- before Apply. Do not run two runtime outboxes.
 
 CREATE TABLE IF NOT EXISTS ada_failed_runs (
   id CHAR(36) NOT NULL,
