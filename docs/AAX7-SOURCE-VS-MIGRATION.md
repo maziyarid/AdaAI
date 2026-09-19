@@ -76,7 +76,7 @@ The repeated 10.11.19 rehearsal additionally exercises the existing control-core
 transition semantics on disposable rows before and after migrations 001-006:
 schedule-release idempotency, job claim/lease, expired-lease reclaim, first
 retry, terminal DLQ, and retry-from-DLQ. The normalized before/after results are
-identical (control_core_behavior_equivalent=true), and each probe restores the
+identical (control_core_ac3_surface_equivalent=true), and each probe restores the
 protected-table baseline. This evidences AAX-7 AC3 without running the
 production worker loop.
 

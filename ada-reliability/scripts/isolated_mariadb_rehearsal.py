@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -235,9 +236,11 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
     schedule_id = f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
     lease_job_id = f"{digit * 7}a-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
     retry_job_id = f"{digit * 7}b-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
-    result1 = f"{digit * 7}c-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
-    result2 = f"{digit * 7}d-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
-    dlq_id = f"{digit * 7}e-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    order_job_a = f"{digit * 7}c-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    order_job_b = f"{digit * 7}d-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    result1 = f"{digit * 7}e-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    result2 = f"{digit * 7}f-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    dlq_id = f"{digit * 7}9-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
     schedule_stable = f"schedule:behavior:{label}"
     schedule_idem = f"schedule:{schedule_stable}:fixed"
     retry_idem = f"behavior-retry:{label}"
@@ -280,6 +283,69 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
         SELECT ROW_COUNT();""",
         db,
     ).strip()
+
+    # Runtime ordering + SKIP LOCKED semantics. The lower-priority-number
+    # job must win normally; while it is locked by another transaction,
+    # the exact live SELECT shape must skip it and return the next job.
+    run_sql(
+        client,
+        sock,
+        f"""INSERT INTO jobs(
+          id,stable_id,idempotency_key,agent,job_type,payload_json,status,
+          priority,attempts,max_attempts,available_at,created_at
+        ) VALUES
+        (
+          '{order_job_a}','job:order-a:{label}','order-a:{label}',
+          'TEST','test.echo','{{"behavior":true}}','queued',10,0,2,NOW(6),
+          DATE_SUB(NOW(6),INTERVAL 2 SECOND)
+        ),
+        (
+          '{order_job_b}','job:order-b:{label}','order-b:{label}',
+          'TEST','test.echo','{{"behavior":true}}','queued',20,0,2,NOW(6),
+          DATE_SUB(NOW(6),INTERVAL 1 SECOND)
+        );""",
+        db,
+    )
+    ordered_first = run_sql(
+        client,
+        sock,
+        """SELECT id FROM jobs
+           WHERE status='queued' AND available_at<=NOW(6)
+             AND idempotency_key LIKE 'order-%'
+           ORDER BY priority ASC,created_at ASC
+           LIMIT 1;""",
+        db,
+    ).strip()
+    holder_sql = (
+        f"START TRANSACTION; SELECT id FROM jobs WHERE id='{order_job_a}' FOR UPDATE; "
+        "SELECT SLEEP(2); COMMIT;"
+    )
+    holder = subprocess.Popen(
+        [client, f"--socket={sock}", "-N", "-B", "-D", db, "-e", holder_sql],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(0.35)
+    skip_locked_selected = run_sql(
+        client,
+        sock,
+        """START TRANSACTION;
+           SELECT id FROM jobs
+            WHERE status='queued' AND available_at<=NOW(6)
+              AND idempotency_key LIKE 'order-%'
+            ORDER BY priority ASC,created_at ASC
+            LIMIT 1 FOR UPDATE SKIP LOCKED;
+           COMMIT;""",
+        db,
+    ).strip()
+    _hout, herr = holder.communicate(timeout=5)
+    if holder.returncode != 0:
+        fail("SKIP LOCKED holder failed: " + herr.strip())
+    if ordered_first != order_job_a:
+        fail(f"priority ordering mismatch: {ordered_first} != {order_job_a}")
+    if skip_locked_selected != order_job_b:
+        fail(f"SKIP LOCKED mismatch: {skip_locked_selected} != {order_job_b}")
 
     lease_claim = run_sql(
         client,
@@ -337,13 +403,33 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
         ) VALUES(
           '{result1}','{retry_job_id}',1,'failed',NULL,'behavior failure',NOW(6),NOW(6)
         );
-        UPDATE jobs SET status='queued',available_at=NOW(6),locked_by=NULL,
-          lease_until=NULL,last_error='behavior failure',finished_at=NULL
+        SET @finish_now=NOW(6);
+        UPDATE jobs SET status='queued',
+          available_at=DATE_ADD(@finish_now,INTERVAL 2 SECOND),
+          locked_by=NULL,lease_until=NULL,last_error='behavior failure',finished_at=NULL
         WHERE id='{retry_job_id}';
-        SELECT status,attempts,(SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}')
+        SELECT status,attempts,
+          TIMESTAMPDIFF(SECOND,@finish_now,available_at),
+          (SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}')
         FROM jobs WHERE id='{retry_job_id}';""",
         db,
     ).strip()
+    retry_blocked_during_backoff = run_sql(
+        client,
+        sock,
+        f"""SELECT COUNT(*) FROM jobs
+        WHERE id='{retry_job_id}' AND status='queued' AND available_at<=NOW(6);""",
+        db,
+    ).strip()
+    if retry_blocked_during_backoff != "0":
+        fail("retry became claimable before exponential backoff elapsed")
+    run_sql(
+        client,
+        sock,
+        f"UPDATE jobs SET available_at=DATE_SUB(NOW(6),INTERVAL 1 SECOND) WHERE id='{retry_job_id}';",
+        db,
+    )
+
     second_claim = run_sql(
         client,
         sock,
@@ -392,10 +478,13 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
     outcome = {
         "schedule_release_first_row_count": release_first,
         "schedule_release_duplicate_row_count": release_duplicate,
+        "priority_order_selected_expected": ordered_first == order_job_a,
+        "skip_locked_selected_expected_next": skip_locked_selected == order_job_b,
         "lease_claim": lease_claim,
         "expired_lease_reap": lease_reap,
         "retry_first_claim": first_claim,
         "retry_after_first_failure": first_failure,
+        "retry_blocked_during_backoff": retry_blocked_during_backoff,
         "retry_second_claim": second_claim,
         "dead_letter_after_terminal_failure": terminal_failure,
         "retry_from_dlq": retry_from_dlq,
@@ -406,7 +495,7 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
         sock,
         f"""DELETE FROM job_results WHERE job_id IN ('{lease_job_id}','{retry_job_id}');
         DELETE FROM dead_letter_queue WHERE job_id IN ('{lease_job_id}','{retry_job_id}');
-        DELETE FROM jobs WHERE id IN ('{lease_job_id}','{retry_job_id}');
+        DELETE FROM jobs WHERE id IN ('{lease_job_id}','{retry_job_id}','{order_job_a}','{order_job_b}');
         DELETE FROM schedules WHERE id='{schedule_id}';""",
         db,
     )
@@ -471,7 +560,7 @@ def main() -> int:
 
     behavior_after = control_core_behavior_probe(client, sock, DB, "after")
     if behavior_after != behavior_before:
-        fail(f"control-core behavior changed after migrations: {behavior_before} != {behavior_after}")
+        fail(f"control-core AC3 surface changed after migrations: {behavior_before} != {behavior_after}")
     if run_sql(client, sock, "SELECT COUNT(*) FROM jobs;", DB).strip() != job_count:
         fail("post-migration behavior probe did not restore jobs baseline")
     if run_sql(client, sock, "SELECT COUNT(*) FROM schedules;", DB).strip() != sched_count:
@@ -629,7 +718,7 @@ def main() -> int:
         "applied": applied,
         "reapplied_idempotent": True,
         "protected_unchanged": True,
-        "control_core_behavior_equivalent": True,
+        "control_core_ac3_surface_equivalent": True,
         "control_core_behavior_before": behavior_before,
         "control_core_behavior_after": behavior_after,
         "ada_tables_applied": ada,

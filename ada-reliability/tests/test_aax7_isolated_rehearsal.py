@@ -168,14 +168,17 @@ def test_isolated_mariadb_report_preserves_control_core_behaviour():
     assert report["production"] is False
     assert report["skip_networking"] is True
     assert report["protected_unchanged"] is True
-    assert report["control_core_behavior_equivalent"] is True
+    assert report["control_core_ac3_surface_equivalent"] is True
     assert report["control_core_behavior_before"] == report["control_core_behavior_after"]
     behavior = report["control_core_behavior_after"]
     assert behavior["schedule_release_first_row_count"] == "1"
     assert behavior["schedule_release_duplicate_row_count"] == "0"
     assert behavior["lease_claim"] == "1\trunning\t1\t1\t1"
     assert behavior["expired_lease_reap"] == "1\tqueued\t1\t1"
-    assert behavior["retry_after_first_failure"] == "queued\t1\t0"
+    assert behavior["priority_order_selected_expected"] is True
+    assert behavior["skip_locked_selected_expected_next"] is True
+    assert behavior["retry_after_first_failure"] == "queued\t1\t2\t0"
+    assert behavior["retry_blocked_during_backoff"] == "0"
     assert behavior["dead_letter_after_terminal_failure"] == "dead\t2\t1"
     assert behavior["retry_from_dlq"] == "queued\t0\t1"
     assert report["rollback_restored_baseline"] is True

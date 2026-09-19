@@ -1,6 +1,6 @@
 # AAX-7 AC1 — encrypted backup / schema checkpoint (STOP, not Apply)
 
-Status: **command plan verified in-repo. Production backup not executed.**
+Status: **AC1 schema checkpoint + restore drill PASS. Full encrypted row backup remains required before any future Apply.**
 Date: 2026-09-19. HEAD at authoring: `e529bc4`.
 
 This is the production-safe **pre-migration backup/schema checkpoint
@@ -20,22 +20,38 @@ Driver: `ada-reliability/scripts/backup_checkpoint_plan.py`
 Rule: models propose. Deterministic code authorizes. Independent
 validators prove the live result.
 
-## Why this is not yet a checked AC1
+## AC1 live evidence — 2026-09-19
 
-AC1 needs a **tested** backup/checkpoint **and** rollback procedure.
-Rollback of `ada_*` is tested in isolation. Encrypted production
-backup + off-host copy + restore drill into a throwaway schema still
-need a human on `mazcontrol` because:
+A production table-schema-only checkpoint was executed from the live MariaDB
+using the runtime DB account. It contained zero row payloads and zero INSERT
+statements.
 
-- viewer `grok-ada-readonly` cannot read
-  `/etc/maziyar-control-core.env` or run `mysqldump`
-- `ada-inspect` is still ENOENT
-- this sandbox has no MariaDB client/server
-- production dump would copy live job payloads unless schema-only
+Evidence:
+- retained checkpoint: /var/backups/ada/control-core/schema-20260919T125013Z.sql
+- sha256: bbe20ae5e6482a988562de16e5faa5634c34a75207e4cd4d846ff240f9e3a488
+- size: 21,296 bytes
+- CREATE TABLE count: 20
+- restored into a disposable MariaDB 10.11 instance with skip-networking
+- restored table inventory matched production: 20/20
+- critical DDL hashes matched for jobs, schedules, job_results,
+  dead_letter_queue, pending_external_sync, and audit_log
+- production SQL writes: none
+- production mutation: none
+- rollback procedure is independently exercised in
+  docs/AAX7-ISOLATED-MARIADB-REHEARSAL.json
 
-Stop here until a human runs the Execute section on the VPS, or until
-an isolated skip-networking rehearsal socket is available to exercise
-the same commands against non-production data.
+The runtime DB account cannot SHOW EVENTS, so routines, events, and triggers
+were excluded from this table-schema checkpoint. They are outside the current
+control-core migration scope. The first privileged dump attempt failed closed
+before producing a usable checkpoint.
+
+This satisfies AAX-7 AC1 as written: the pre-migration schema checkpoint and
+rollback procedure are tested. It does not replace the operational pre-Apply
+requirement for a full encrypted row backup with an off-host private key and
+checksum-verified off-host copy.
+
+Secret-free machine-readable evidence:
+docs/AAX7-LIVE-SCHEMA-CHECKPOINT-RESTORE.json.
 
 ## Artefacts (no secrets)
 
@@ -68,43 +84,44 @@ control-core env file.
 
 ### 0. Preconditions (stop if any fail)
 
-1. `ada-inspect tables` captured (AAX-3 AC3) **or** an explicit
-   written waiver that schema-only dump is the table inventory.
-2. Disk free ≥ 3× current datadir size.
-3. `age` and `mysqldump` present.
-4. Age public recipient configured; private key **off-host**.
-5. Off-host destination reachable.
-6. Production Apply of `001`–`006` is **not** in this session.
+For the schema checkpoint:
+1. ada-inspect tables captured.
+2. mariadb-dump present.
+3. Temporary defaults file is mode 0600 and deleted after use.
+4. Production Apply is not in this session.
+
+Additional requirements before the full encrypted row backup:
+5. Disk free is at least 3 times the current datadir size.
+6. age is installed.
+7. An age public recipient is configured; the private key remains off-host.
+8. Off-host destination is reachable and checksum verification is available.
 
 ### 1. Schema-only checkpoint (no row payloads)
 
-```bash
-mysqldump --defaults-extra-file=/etc/ada/mysql.cnf \
-  --single-transaction --no-data --skip-comments --skip-dump-date \
-  --routines --triggers --events \
-  --databases "$CONTROL_DB_NAME" \
-  > "$DEST/schema-$TS.sql"
-sha256sum "$DEST/schema-$TS.sql" | tee "$DEST/schema-$TS.sql.sha256"
-```
+The live runtime account lacks SHOW EVENTS, and the Phase-1 migration scope is
+table DDL. The tested checkpoint therefore excludes routines, events, and
+triggers explicitly.
 
-Must include `jobs`, `schedules`, `job_results`, `dead_letter_queue`,
-`pending_external_sync`. Must **not** contain `INSERT INTO`.
+    mariadb-dump --defaults-extra-file=/run/ada-mysql.cnf       --single-transaction --no-data --skip-comments --skip-dump-date       --skip-triggers --skip-routines --skip-events       "$CONTROL_DB_NAME" > "$DEST/schema-$TS.sql"
+    sha256sum "$DEST/schema-$TS.sql" > "$DEST/schema-$TS.sql.sha256"
+
+The temporary defaults file is created mode 0600, used only for the dump/read
+commands, and removed immediately afterward.
+Root may read /etc/maziyar-control-core.env only to construct that temporary file; the env file itself is never passed to mariadb-dump, copied into an artefact, or committed.
+
+Must include jobs, schedules, job_results, dead_letter_queue, and
+pending_external_sync. Must contain zero INSERT INTO statements.
 
 ### 2. Encrypted full logical backup
 
-```bash
-mysqldump --defaults-extra-file=/etc/ada/mysql.cnf \
-  --single-transaction --routines --triggers --events --hex-blob \
-  --databases "$CONTROL_DB_NAME" \
-  | gzip -9 \
-  | age -r "$ADA_BACKUP_AGE_RECIPIENT" \
-    -o "$DEST/full-$TS.sql.gz.age"
-sha256sum "$DEST/full-$TS.sql.gz.age" | tee "$DEST/full-$TS.sql.gz.age.sha256"
-chmod 600 "$DEST/full-$TS.sql.gz.age" "$DEST/"*.sha256
-```
+This safeguard is still pending because age and an off-host recipient are not
+configured. When they are available, use the same table-backed scope:
 
-`--single-transaction` is required (InnoDB). Do not use `--lock-all-tables`
-on the live control-core. Do not log the dump body.
+    mariadb-dump --defaults-extra-file=/run/ada-mysql.cnf       --single-transaction --skip-triggers --skip-routines --skip-events       --hex-blob "$CONTROL_DB_NAME"       | gzip -9       | age -r "$ADA_BACKUP_AGE_RECIPIENT"         -o "$DEST/full-$TS.sql.gz.age"
+    sha256sum "$DEST/full-$TS.sql.gz.age" > "$DEST/full-$TS.sql.gz.age.sha256"
+
+single-transaction is required for InnoDB. Do not use lock-all-tables on the
+live control core. Never log or print the dump body.
 
 ### 3. Checksum / verification
 
@@ -162,30 +179,27 @@ Shadow/Ada must not execute it.
 
 ## Isolated rehearsal mapping
 
-The skip-networking MariaDB rehearsal already:
+The skip-networking MariaDB rehearsal:
+- checkpoints the 20 control-core tables and protected CREATE hashes
+- exercises job/schedule/lease/retry/DLQ semantics before and after migrations
+- applies migrations 001-006 twice
+- drops only ada_* and restores the 20-table baseline
 
-- checkpointed 20 live-source tables + protected CREATE sha256
-- applied `001`–`006` twice
-- dropped only `ada_*` and restored the 20-table baseline
+The live schema checkpoint restore drill now additionally proves that a
+production DDL checkpoint can be restored into a throwaway MariaDB and recover
+the same table inventory and critical DDL.
 
-What it did **not** do (still open for AC1):
-
-- `age` encryption of a dump
-- off-host copy
-- restore into a second throwaway schema from ciphertext
-- production `mysqldump` of `$CONTROL_DB_NAME`
-
-Re-run `isolated_mariadb_rehearsal.py` plus this plan’s encrypt/restore
-steps against `/tmp/ada-rehearsal.sock` when a disposable mysqld is
-available. Set `ADA_BACKUP_EXECUTE=isolated-rehearsal`. Never point
-the driver at `server.maziyarid.com` or TCP 3306.
+AC1 is therefore checked. The full encrypted row backup/off-host-copy path is
+still a pre-Apply safeguard and remains intentionally incomplete because no
+off-host age recipient is configured.
 
 ## Explicitly not done
 
-- Production `mysqldump`
-- Production `age` encrypt
-- Production restore
-- Apply of `001`–`006`
-- Reading `/etc/maziyar-control-core.env`
+- Production full-row dump
+- Production age encryption
+- Production row-data restore
+- Apply of migrations 001-006
+- Persisting production DB credentials outside the temporary 0600 defaults file
 
-PRODUCTION_SQL: **NONE**. PRODUCTION_MUTATION: **NONE**.
+PRODUCTION_SQL_WRITE: **NONE**. PRODUCTION_MUTATION: **NONE**.
+Production schema read/checkpoint: **DONE**.
