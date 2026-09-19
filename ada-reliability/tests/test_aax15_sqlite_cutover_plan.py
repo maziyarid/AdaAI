@@ -50,7 +50,7 @@ def make_db(path: Path, states=("succeeded", "parked")) -> Path:
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 f"stable-{i}", f"idem-{i}", "w", f"r-{i}", event, state, "TEST", "reason",
-                "", "", "", "", '{"content":"x"}', "human approval" if state == "parked" else "",
+                "", "", "", "", '{\"content\":\"x\"}', "human approval" if state == "parked" else "",
                 1, 5, "2026-09-18T00:00:00+00:00", "2026-09-18T00:00:01+00:00",
                 None, None, None, "none", "2026-09-18T00:00:02+00:00" if state == "succeeded" else None,
                 "2026-09-18T00:00:00+00:00", "2026-09-18T00:00:01+00:00",
@@ -114,7 +114,7 @@ def test_payload_durable_job_binding_is_preserved(tmp_path):
     c = sqlite3.connect(db)
     c.execute(
         "UPDATE pd_outbox SET payload_json=? WHERE stable_id='stable-2'",
-        ('{"content":"x","durable_job_id":"job-from-payload"}',),
+        ('{\"content\":\"x\",\"durable_job_id\":\"job-from-payload\"}',),
     )
     c.commit()
     c.close()
@@ -139,7 +139,7 @@ def test_conflicting_payload_and_explicit_job_binding_is_refused(tmp_path):
     c = sqlite3.connect(db)
     c.execute(
         "UPDATE pd_outbox SET payload_json=? WHERE stable_id='stable-2'",
-        ('{"content":"x","durable_job_id":"job-from-payload"}',),
+        ('{\"content\":\"x\",\"durable_job_id\":\"job-from-payload\"}',),
     )
     c.commit()
     c.close()
@@ -154,21 +154,20 @@ def test_conflicting_payload_and_explicit_job_binding_is_refused(tmp_path):
 
 def test_verified_external_sync_delegation_removes_second_replay_authority(tmp_path):
     db = make_db(tmp_path / "factory.sqlite3")
+    proof = "agiflow:stable-2|idem-2|pes-cc-42"
     plan = cutover.build_plan(
         db,
-        external_sync_delegations={"stable-2": "agiflow:stable-2"},
+        external_sync_delegations={"stable-2": proof},
     )
     assert plan["cutover_ready_for_approved_maintenance_window"] is True
     assert plan["preconditions"]["missing_durable_job_bindings"] == []
     assert plan["preconditions"]["delegated_external_sync_rows"] == ["stable-2"]
+    assert plan["preconditions"]["delegated_control_core_records"] == {"stable-2": "pes-cc-42"}
     parked = next(r for r in plan["target"]["rows"] if r["lifecycle"] == "parked")
     assert parked["mutation_kind"] == "none"
     assert parked["durable_job_id"] is None
     assert parked["external_sync_state"] == "delegated_control_core"
-    assert (
-        parked["payload"]["_legacy_pd_outbox"]["delegated_external_sync_stable_id"]
-        == "agiflow:stable-2"
-    )
+    assert parked["payload"]["_legacy_pd_outbox"]["delegated_external_sync_stable_id"] == proof
 
 
 def test_external_sync_delegation_requires_bridge_stable_id_shape(tmp_path):
@@ -176,7 +175,7 @@ def test_external_sync_delegation_requires_bridge_stable_id_shape(tmp_path):
     try:
         cutover.build_plan(
             db,
-            external_sync_delegations={"stable-2": "agiflow:wrong-row"},
+            external_sync_delegations={"stable-2": "agiflow:wrong-row|idem-2|pes-cc-42"},
         )
     except cutover.CutoverError as exc:
         assert "stable_id mismatch" in str(exc)
@@ -184,12 +183,51 @@ def test_external_sync_delegation_requires_bridge_stable_id_shape(tmp_path):
         raise AssertionError("mismatched control-core stable_id must be refused")
 
 
+def test_row_local_delegation_without_control_core_record_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2"},
+        )
+    except cutover.CutoverError as exc:
+        assert "control-core proof" in str(exc)
+    else:
+        raise AssertionError("row-local delegation marker must be refused")
+
+
+def test_delegation_idempotency_key_must_match_legacy_row(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2|wrong-key|pes-cc-42"},
+        )
+    except cutover.CutoverError as exc:
+        assert "idempotency_key mismatch" in str(exc)
+    else:
+        raise AssertionError("mismatched idempotency key must be refused")
+
+
+def test_delegation_control_core_record_cannot_be_the_sqlite_stable_id(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|stable-2"},
+        )
+    except cutover.CutoverError as exc:
+        assert "independent of the SQLite row" in str(exc)
+    else:
+        raise AssertionError("SQLite-derived control-core record id must be refused")
+
+
 def test_external_sync_delegation_only_applies_to_agiflow_rows(tmp_path):
     db = make_db(tmp_path / "factory.sqlite3")
     try:
         cutover.build_plan(
             db,
-            external_sync_delegations={"stable-1": "agiflow:stable-1"},
+            external_sync_delegations={"stable-1": "agiflow:stable-1|idem-1|pes-cc-1"},
         )
     except cutover.CutoverError as exc:
         assert "only valid for agiflow_sync" in str(exc)
@@ -203,7 +241,7 @@ def test_job_binding_and_external_delegation_are_mutually_exclusive(tmp_path):
         cutover.build_plan(
             db,
             {"stable-2": "job-2"},
-            {"stable-2": "agiflow:stable-2"},
+            {"stable-2": "agiflow:stable-2|idem-2|pes-cc-42"},
         )
     except cutover.CutoverError as exc:
         assert "both durable job binding and external-sync delegation" in str(exc)
