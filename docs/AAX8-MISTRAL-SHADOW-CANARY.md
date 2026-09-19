@@ -111,3 +111,47 @@ Secret-free hashes:
 - evaluated proposal: `b0ca64dab2f68a56c0cbb0f22c43535cb2dfc491f3847119998ea7821d8a6f24`
 
 The secret-free evidence summary is `docs/AAX8-LIVE-MISTRAL-E2E-EVIDENCE.json`. All AAX-8 ACs are now evidenced; Review, not Done.
+
+## Stronger live control-core job canary — 2026-09-19
+
+A second live proof binds the shadow path to an existing production control-core
+job, not merely an Agiflow task description.
+
+Source job (read only):
+- id 8a901775-30a0-4604-bd19-ed0c9e8dca16
+- stable id job:schedule:schedule:seo-scout:497170
+- type seo_scout.run
+- status succeeded
+
+The authenticated ControlCoreAdapter read the real job. Its payload was consumed
+in memory to construct the live Mistral prompt, but the payload itself was never
+printed or written to repository evidence. Only canonical context hash
+b5b297795682b5628ca6ff7cc44f88049d884c3aca20bcecd61048ac9bf9abb5
+was retained.
+
+The live mistral-small-latest worker then returned a strict JSON proposal through
+loopback /internal/chat. Response hash:
+bc9e3978101f716a0c530eb1828e8a01cb86cf81fe6c9165cfc7bb3f84d46c7f.
+
+That exact returned proposal (hash
+d14c11a430809d336c46b2881cb83c566d1d1b4476f8be7c0495a4ab2dc2227c)
+was passed to ShadowPipeline.evaluate with the real live_job_id. The pipeline
+bound the real job with payload_copied=false; evaluate, postcondition, and
+rollback evidence all passed HMAC verification.
+
+Observed safety result:
+- WordPress writes 0 -> 0
+- journal unchanged
+- production SQL false
+- production mutation false
+- job enqueue false
+- schedule mutation false
+- task completed false
+- rollback executed false
+- postcondition_proven=false, as expected because shadow never applied the proposal
+
+This directly evidences AAX-8 AC1, AC3, and AC4 in addition to the existing AC2.
+AAX-8 may therefore move to Review, not Done.
+
+Secret-free summary:
+docs/AAX8-LIVE-JOB-MISTRAL-E2E-EVIDENCE.json.
