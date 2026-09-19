@@ -10,7 +10,9 @@ def test_aax7_map_exists_and_stops_before_apply():
     text = DOC.read_text(encoding="utf-8")
     assert "STOP before Apply" in text
     assert "Production SQL this session: **NONE**" in text
-    assert "not `SHOW TABLES`" in text or "not** `SHOW TABLES`" in text
+    assert "AAX7-LIVE-RECOVERY-STORES.json" in text
+    assert "no ada_* / pd_* tables" in text
+    assert "OVERLAP / HOLD" in text
     assert "006_ada_failed_run_outbox.sql" in text
     assert "ada_failed_runs" in text
     assert SQL006.is_file()
@@ -21,5 +23,6 @@ def test_aax7_map_exists_and_stops_before_apply():
     # classification vocabulary present
     for label in ("already provided live", "complementary", "overlapping", "still missing"):
         assert label in text
-    # do not claim live MariaDB proof
-    assert "AC3 remains open" in text or "AAX-3 AC3 remains open" in text
+    # live metadata is now available; do not regress to the pre-ada-inspect blocker.
+    assert "ada-inspect tables has now run" in text
+    assert "AAX-3 AC3 remains open" not in text

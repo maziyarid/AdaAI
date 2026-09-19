@@ -1,6 +1,7 @@
 """AAX-7 isolated inventory rehearsal. Never talks to production MariaDB."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LIVE_SOURCE = ROOT / "runtime" / "control-core-baseline" / "live" / "control_core.py"
 SQL_DIR = ROOT / "ada-reliability" / "sql" / "mariadb"
 DOC = ROOT / "docs" / "AAX7-SOURCE-VS-MIGRATION.md"
+REPORT = ROOT / "docs" / "AAX7-ISOLATED-MARIADB-REHEARSAL.json"
 MIGRATIONS = (
     "001_ada_memory.sql",
     "002_ada_receipts_passports.sql",
@@ -98,12 +100,13 @@ def test_isolated_rehearsal_adds_only_ada_tables_and_rolls_back():
     assert not any(name.startswith("ada_") for name in after_rollback)
 
 
-def test_isolated_rehearsal_does_not_claim_production_or_show_tables():
+def test_isolated_rehearsal_does_not_claim_production_and_links_live_evidence():
     text = DOC.read_text(encoding="utf-8")
     assert "isolated inventory rehearsal" in text.lower()
     assert "Production SQL this session: **NONE**" in text
-    assert "not `SHOW TABLES`" in text or "not** `SHOW TABLES`" in text
-    assert "conflict" in text.lower()
+    assert "AAX7-LIVE-RECOVERY-STORES.json" in text
+    assert "no ada_* / pd_* tables" in text
+    assert "OVERLAP / HOLD" in text
     for label in (
         "persistence",
         "failure records",
@@ -158,3 +161,26 @@ def test_rehearsal_script_requires_disposable_instance_marker(tmp_path, monkeypa
     assert rehearsal.require_disposable_marker(sock) == real
     real.unlink()
     monkeypatch.delenv("ADA_REHEARSAL_MARKER", raising=False)
+
+
+def test_isolated_mariadb_report_preserves_control_core_behaviour():
+    report = json.loads(REPORT.read_text(encoding="utf-8"))
+    assert report["production"] is False
+    assert report["skip_networking"] is True
+    assert report["protected_unchanged"] is True
+    assert report["control_core_behavior_equivalent"] is True
+    assert report["control_core_behavior_before"] == report["control_core_behavior_after"]
+    behavior = report["control_core_behavior_after"]
+    assert behavior["schedule_release_first_row_count"] == "1"
+    assert behavior["schedule_release_duplicate_row_count"] == "0"
+    assert behavior["lease_claim"] == "1\trunning\t1\t1\t1"
+    assert behavior["expired_lease_reap"] == "1\tqueued\t1\t1"
+    assert behavior["retry_after_first_failure"] == "queued\t1\t0"
+    assert behavior["dead_letter_after_terminal_failure"] == "dead\t2\t1"
+    assert behavior["retry_from_dlq"] == "queued\t0\t1"
+    assert report["rollback_restored_baseline"] is True
+    assert report["datadir_scope"] == "/tmp/"
+    assert report["socket_scope"] == "/tmp/"
+    assert report["disposable_marker_verified"] is True
+    assert "aax3_ac3" not in report
+    assert "show_tables_live_vps" not in report

@@ -222,6 +222,196 @@ def expect_error(client: str, sock: Path, db: str, sql: str, needle: str) -> str
     return blob.splitlines()[-1] if blob else "error"
 
 
+def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) -> dict[str, object]:
+    """Exercise the existing control-core job/schedule/lease/retry/DLQ contract.
+
+    This uses only disposable rehearsal rows in the isolated schema and cleans
+    them up before returning. SQL mirrors the live control_core.py transitions;
+    it never imports or contacts the production service.
+    """
+    if label not in {"before", "after"}:
+        fail("invalid behavior probe label")
+    digit = "1" if label == "before" else "2"
+    schedule_id = f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    lease_job_id = f"{digit * 7}a-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    retry_job_id = f"{digit * 7}b-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    result1 = f"{digit * 7}c-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    result2 = f"{digit * 7}d-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    dlq_id = f"{digit * 7}e-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}"
+    schedule_stable = f"schedule:behavior:{label}"
+    schedule_idem = f"schedule:{schedule_stable}:fixed"
+    retry_idem = f"behavior-retry:{label}"
+
+    run_sql(
+        client,
+        sock,
+        f"""INSERT INTO schedules(
+          id,stable_id,agent,job_type,payload_json,interval_seconds,enabled,next_run_at,max_attempts
+        ) VALUES(
+          '{schedule_id}','{schedule_stable}','TEST','test.echo','{{"behavior":true}}',
+          300,1,NOW(6),2
+        );""",
+        db,
+    )
+    release_first = run_sql(
+        client,
+        sock,
+        f"""INSERT IGNORE INTO jobs(
+          id,stable_id,idempotency_key,agent,job_type,payload_json,status,
+          priority,max_attempts,available_at
+        ) VALUES(
+          '{lease_job_id}','job:{schedule_idem}','{schedule_idem}',
+          'TEST','test.echo','{{"behavior":true}}','queued',100,2,NOW(6)
+        );
+        SELECT ROW_COUNT();""",
+        db,
+    ).strip()
+    release_duplicate = run_sql(
+        client,
+        sock,
+        f"""INSERT IGNORE INTO jobs(
+          id,stable_id,idempotency_key,agent,job_type,payload_json,status,
+          priority,max_attempts,available_at
+        ) VALUES(
+          '{digit * 7}f-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}',
+          'job:{schedule_idem}:dup','{schedule_idem}',
+          'TEST','test.echo','{{"behavior":true}}','queued',100,2,NOW(6)
+        );
+        SELECT ROW_COUNT();""",
+        db,
+    ).strip()
+
+    lease_claim = run_sql(
+        client,
+        sock,
+        f"""UPDATE jobs SET
+          status='running',locked_by='behavior-worker',
+          lease_until=DATE_ADD(NOW(6),INTERVAL 120 SECOND),attempts=attempts+1
+        WHERE id='{lease_job_id}' AND status='queued' AND available_at<=NOW(6);
+        SELECT ROW_COUNT(),status,attempts,(locked_by IS NOT NULL),(lease_until IS NOT NULL)
+        FROM jobs WHERE id='{lease_job_id}';""",
+        db,
+    ).strip()
+    run_sql(
+        client,
+        sock,
+        f"UPDATE jobs SET lease_until=DATE_SUB(NOW(6),INTERVAL 1 SECOND) WHERE id='{lease_job_id}';",
+        db,
+    )
+    lease_reap = run_sql(
+        client,
+        sock,
+        f"""UPDATE jobs SET status='queued',locked_by=NULL,lease_until=NULL
+        WHERE id='{lease_job_id}' AND status='running' AND lease_until<NOW(6);
+        SELECT ROW_COUNT(),status,(locked_by IS NULL),(lease_until IS NULL)
+        FROM jobs WHERE id='{lease_job_id}';""",
+        db,
+    ).strip()
+
+    run_sql(
+        client,
+        sock,
+        f"""INSERT INTO jobs(
+          id,stable_id,idempotency_key,agent,job_type,payload_json,status,
+          priority,attempts,max_attempts,available_at
+        ) VALUES(
+          '{retry_job_id}','job:{retry_idem}','{retry_idem}',
+          'TEST','test.fail','{{"message":"behavior"}}','queued',100,0,2,NOW(6)
+        );""",
+        db,
+    )
+    first_claim = run_sql(
+        client,
+        sock,
+        f"""UPDATE jobs SET status='running',locked_by='behavior-worker',
+          lease_until=DATE_ADD(NOW(6),INTERVAL 120 SECOND),attempts=attempts+1
+        WHERE id='{retry_job_id}' AND status='queued' AND available_at<=NOW(6);
+        SELECT ROW_COUNT(),attempts FROM jobs WHERE id='{retry_job_id}';""",
+        db,
+    ).strip()
+    first_failure = run_sql(
+        client,
+        sock,
+        f"""INSERT INTO job_results(
+          id,job_id,attempt,status,result_json,error_text,started_at,finished_at
+        ) VALUES(
+          '{result1}','{retry_job_id}',1,'failed',NULL,'behavior failure',NOW(6),NOW(6)
+        );
+        UPDATE jobs SET status='queued',available_at=NOW(6),locked_by=NULL,
+          lease_until=NULL,last_error='behavior failure',finished_at=NULL
+        WHERE id='{retry_job_id}';
+        SELECT status,attempts,(SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}')
+        FROM jobs WHERE id='{retry_job_id}';""",
+        db,
+    ).strip()
+    second_claim = run_sql(
+        client,
+        sock,
+        f"""UPDATE jobs SET status='running',locked_by='behavior-worker',
+          lease_until=DATE_ADD(NOW(6),INTERVAL 120 SECOND),attempts=attempts+1
+        WHERE id='{retry_job_id}' AND status='queued' AND available_at<=NOW(6);
+        SELECT ROW_COUNT(),attempts FROM jobs WHERE id='{retry_job_id}';""",
+        db,
+    ).strip()
+    terminal_failure = run_sql(
+        client,
+        sock,
+        f"""INSERT INTO job_results(
+          id,job_id,attempt,status,result_json,error_text,started_at,finished_at
+        ) VALUES(
+          '{result2}','{retry_job_id}',2,'failed',NULL,'behavior terminal',NOW(6),NOW(6)
+        );
+        UPDATE jobs SET status='dead',available_at=NOW(6),locked_by=NULL,
+          lease_until=NULL,last_error='behavior terminal',finished_at=NOW(6)
+        WHERE id='{retry_job_id}';
+        INSERT IGNORE INTO dead_letter_queue(
+          id,job_id,stable_id,agent,job_type,payload_json,attempts,error_text
+        ) VALUES(
+          '{dlq_id}','{retry_job_id}','dlq:job:{retry_idem}',
+          'TEST','test.fail','{{"message":"behavior"}}',2,'behavior terminal'
+        );
+        SELECT status,attempts,(SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}')
+        FROM jobs WHERE id='{retry_job_id}';""",
+        db,
+    ).strip()
+    retry_from_dlq = run_sql(
+        client,
+        sock,
+        f"""UPDATE jobs SET status='queued',available_at=NOW(6),locked_by=NULL,
+          lease_until=NULL,finished_at=NULL,last_error=NULL
+        WHERE id='{retry_job_id}' AND status='dead';
+        UPDATE dead_letter_queue SET resolved_at=NOW(6),resolution_note='retried'
+        WHERE job_id='{retry_job_id}' AND resolved_at IS NULL;
+        SELECT status,
+          (SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}' AND resolved_at IS NULL),
+          (SELECT COUNT(*) FROM dead_letter_queue WHERE job_id='{retry_job_id}' AND resolved_at IS NOT NULL)
+        FROM jobs WHERE id='{retry_job_id}';""",
+        db,
+    ).strip()
+
+    outcome = {
+        "schedule_release_first_row_count": release_first,
+        "schedule_release_duplicate_row_count": release_duplicate,
+        "lease_claim": lease_claim,
+        "expired_lease_reap": lease_reap,
+        "retry_first_claim": first_claim,
+        "retry_after_first_failure": first_failure,
+        "retry_second_claim": second_claim,
+        "dead_letter_after_terminal_failure": terminal_failure,
+        "retry_from_dlq": retry_from_dlq,
+    }
+
+    run_sql(
+        client,
+        sock,
+        f"""DELETE FROM job_results WHERE job_id IN ('{lease_job_id}','{retry_job_id}');
+        DELETE FROM dead_letter_queue WHERE job_id IN ('{lease_job_id}','{retry_job_id}');
+        DELETE FROM jobs WHERE id IN ('{lease_job_id}','{retry_job_id}');
+        DELETE FROM schedules WHERE id='{schedule_id}';""",
+        db,
+    )
+    return outcome
+
 def main() -> int:
     sock = require_socket()
     marker = require_disposable_marker(sock)
@@ -252,6 +442,12 @@ def main() -> int:
     sched_count = run_sql(client, sock, "SELECT COUNT(*) FROM schedules;", DB).strip()
     sync_count = run_sql(client, sock, "SELECT COUNT(*) FROM pending_external_sync;", DB).strip()
 
+    behavior_before = control_core_behavior_probe(client, sock, DB, "before")
+    if run_sql(client, sock, "SELECT COUNT(*) FROM jobs;", DB).strip() != job_count:
+        fail("behavior probe did not restore jobs baseline")
+    if run_sql(client, sock, "SELECT COUNT(*) FROM schedules;", DB).strip() != sched_count:
+        fail("behavior probe did not restore schedules baseline")
+
     applied = []
     for name in MIGRATIONS:
         path = SQL_DIR / name
@@ -272,6 +468,14 @@ def main() -> int:
         fail("schedules row count changed")
     if run_sql(client, sock, "SELECT COUNT(*) FROM pending_external_sync;", DB).strip() != sync_count:
         fail("pending_external_sync row count changed")
+
+    behavior_after = control_core_behavior_probe(client, sock, DB, "after")
+    if behavior_after != behavior_before:
+        fail(f"control-core behavior changed after migrations: {behavior_before} != {behavior_after}")
+    if run_sql(client, sock, "SELECT COUNT(*) FROM jobs;", DB).strip() != job_count:
+        fail("post-migration behavior probe did not restore jobs baseline")
+    if run_sql(client, sock, "SELECT COUNT(*) FROM schedules;", DB).strip() != sched_count:
+        fail("post-migration behavior probe did not restore schedules baseline")
 
     ada = sorted(t for t in after_tables if t.startswith("ada_"))
     if not ada:
@@ -416,15 +620,18 @@ def main() -> int:
     report = {
         "production": False,
         "skip_networking": True,
-        "datadir": datadir,
-        "disposable_marker": str(marker),
+        "datadir_scope": "/tmp/",
+        "disposable_marker_verified": True,
         "mariadb_version": version,
         "database": DB,
-        "socket": str(sock),
+        "socket_scope": "/tmp/",
         "live_source": str(LIVE_SOURCE.relative_to(REPO)),
         "applied": applied,
         "reapplied_idempotent": True,
         "protected_unchanged": True,
+        "control_core_behavior_equivalent": True,
+        "control_core_behavior_before": behavior_before,
+        "control_core_behavior_after": behavior_after,
         "ada_tables_applied": ada,
         "ada_table_count": len(ada),
         "baseline_tables": sorted(before_tables),
@@ -435,8 +642,7 @@ def main() -> int:
         "cas_stale_generation_row_count": cas2.strip(),
         "rollback_dropped": ada_to_drop,
         "rollback_restored_baseline": True,
-        "show_tables_live_vps": False,
-        "aax3_ac3": "OPEN",
+        "live_vps_schema_evidence": "docs/AAX7-LIVE-RECOVERY-STORES.json",
     }
     print(json.dumps(report, indent=2, sort_keys=True))
     run_sql(client, sock, f"DROP DATABASE IF EXISTS `{DB}`;")

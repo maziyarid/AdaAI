@@ -6,21 +6,21 @@ Isolated inventory rehearsal added 2026-09-19T09:00Z against
 Isolated **MariaDB** rehearsal added 2026-09-19T09:16Z (disposable
 skip-networking 10.11.11 instance; not VPS SHOW TABLES).
 
-This is **live source schema** from
-`runtime/control-core-baseline/live/control_core.py` (65370 bytes).
-It is **not** `SHOW TABLES`. AAX-3 AC3 remains open until
-`ada-inspect tables` runs. Do **not** apply production SQL from this
-document.
+The original reconciliation began from the captured live source schema. It has now been superseded by direct production table/schema metadata captured with ada-inspect. Production SQL is still not authorised by this document.
+
+Current live reconciliation — 2026-09-19
+
+ada-inspect tables has now run on server.maziyarid.com. Production MariaDB has
+the expected 20 control-core tables and no ada_* / pd_* tables. The active
+pd_worker_runs / pd_outbox recovery store is separate SQLite and is recorded in
+docs/AAX7-LIVE-RECOVERY-STORES.json.
 
 Rule: models propose. Deterministic code authorizes. Independent
 validators prove the live result.
 
 ## Decision (not executed)
 
-Retain additive repo migrations as complementary **if** live MariaDB
-has no `pd_worker_runs` / `pd_outbox` / `ada_*`. If those tables exist
-live, stop and remap 006 rather than creating a second recovery
-outbox. Human approval still required before Apply.
+Live MariaDB contains no ada_* or pd_* tables, but the active AAX-15 recovery authority is the separate SQLite pd_worker_runs/pd_outbox store. Therefore migrations 001-005 remain additive candidates, while migration 006 is OVERLAP / HOLD until the SQLite recovery authority is explicitly mapped, migrated, or retired. Do not run two recovery outboxes. Human approval remains required before any production Apply.
 
 ## Isolated inventory rehearsal (not production, not MariaDB)
 
@@ -40,10 +40,7 @@ and does **not** satisfy AAX-3 AC3.
 
 ## Isolated MariaDB rehearsal (not production)
 
-Executed 2026-09-19T09:16Z on a disposable MariaDB **10.11.11**
-instance started with `--skip-networking`, unix socket under `/tmp`,
-port 0. Driver: `ada-reliability/scripts/isolated_mariadb_rehearsal.py`.
-Evidence JSON: `docs/AAX7-ISOLATED-MARIADB-REHEARSAL.json`.
+Initially executed on disposable MariaDB **10.11.11** and repeated after live reconciliation on disposable MariaDB **10.11.19**, always with --skip-networking and socket/datadir/PID under /tmp. Driver: ada-reliability/scripts/isolated_mariadb_rehearsal.py. Evidence JSON: docs/AAX7-ISOLATED-MARIADB-REHEARSAL.json.
 
 This is **not** `server.maziyarid.com`. This is **not** `maziyar_control`.
 `skip_networking=ON` was required before any SQL. Production env files
@@ -69,12 +66,19 @@ Proven on this isolated schema:
    protected CREATE hashes matched the checkpoint.
 9. Isolated database dropped at end. Production SQL: **NONE**.
 
-Not proven by this rehearsal:
+Still not proven/executed by this rehearsal:
 
-- live VPS `SHOW TABLES` / `pd_*` presence (AAX-3 AC3)
-- encrypted production backup + restore drill
-- live control-core Python claim/lease loop against post-migration schema
+- encrypted production backup + restore drill (AAX-7 AC1)
 - production Apply
+- migration 006 retirement/mapping decision against the active SQLite pd_outbox; 006 remains HOLD
+
+The repeated 10.11.19 rehearsal additionally exercises the existing control-core
+transition semantics on disposable rows before and after migrations 001-006:
+schedule-release idempotency, job claim/lease, expired-lease reclaim, first
+retry, terminal DLQ, and retry-from-DLQ. The normalized before/after results are
+identical (control_core_behavior_equivalent=true), and each probe restores the
+protected-table baseline. This evidences AAX-7 AC3 without running the
+production worker loop.
 
 ## Responsibility map
 
@@ -112,12 +116,11 @@ only after live `pd_worker_runs` / `pd_outbox` presence is known.
 
 ## Still required before Apply
 
-1. `ada-inspect tables` → live `ada_%` / `pd_%` names
-2. `ada-inspect create jobs` / `schedules` / `pending_external_sync`
-3. If present, `ada-inspect create pd_worker_runs` / `pd_outbox`
-4. Encrypted backup + restore drill (command plan:
-   `docs/AAX7-BACKUP-CHECKPOINT.md`; production dump **not** executed)
-5. Human approval
+1. Encrypted production backup + restore drill (command plan:
+   docs/AAX7-BACKUP-CHECKPOINT.md; production dump not executed).
+2. Resolve the migration-006 HOLD: map/migrate/retire the active SQLite
+   recovery authority before any MariaDB ada_failed_runs runtime is enabled.
+3. Human approval for any production Apply.
 
 Production SQL this session: **NONE**.
 
@@ -128,3 +131,5 @@ Actual production metadata is now known. MariaDB has the expected 20 control-cor
 This changes the 006 classification from conditional to **OVERLAP / HOLD**. SQLite `pd_outbox` already provides unique idempotency, failure metadata, retry attempts/eligibility, reset conditions, lease ownership/expiry, external-sync state, and terminal state. `006_ada_failed_run_outbox.sql` would create another recovery authority with materially the same responsibilities. Do not run both. Migrations 001–005 remain additive candidates subject to human approval; 006 requires an explicit map/migrate/retire decision first.
 
 AAX-7 remains Testing. Production SQL remains NONE.
+
+AAX-7 AC3 is now evidenced by the disposable before/after behaviour rehearsal. AAX-7 remains **Testing** because AC1 (encrypted production backup/schema checkpoint plus restore drill) is still open. Production SQL remains **NONE**.
