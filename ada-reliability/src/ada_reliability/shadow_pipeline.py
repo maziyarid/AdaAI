@@ -60,10 +60,13 @@ FORBIDDEN_ADAPTER_ATTRS = (
     "mysqldump",
     "wp_update",
     "wp_publish",
+    "wp_delete",
 )
 
-# Repository shadow must not GET live control-core unless a canary is authorised.
-LIVE_CONTROL_CORE_URL_MARKERS = ("127.0.0.1:8770", "localhost:8770")
+# Repository shadow must not GET a networked control-core unless a canary
+# is authorised. The live-read gate treats any configured base_url as live;
+# it does not rely on a 127.0.0.1/localhost denylist that hostname aliases
+# can bypass.
 
 
 def assert_adapter_is_read_only(adapter: Any) -> None:
@@ -73,10 +76,22 @@ def assert_adapter_is_read_only(adapter: Any) -> None:
 
 
 def adapter_targets_live_control_core(adapter: Any) -> bool:
-    """True when the adapter would talk to the live loopback control-core."""
+    """True when get_job would perform a networked control-core read.
+
+    Fail closed: any configured ``base_url`` is a live/network target.
+    Hostname aliases of loopback (or any other host) must not bypass the
+    gate. Literal ``127.0.0.1:8770`` / ``localhost:8770`` matches are
+    included, but they are not sufficient by themselves. Test doubles
+    have no ``config.base_url``.
+    """
     cfg = getattr(adapter, "config", None)
-    base = str(getattr(cfg, "base_url", "") or "")
-    return any(marker in base for marker in LIVE_CONTROL_CORE_URL_MARKERS)
+    base = str(getattr(cfg, "base_url", "") or "").strip()
+    if base:
+        return True
+    cls = type(adapter)
+    if getattr(cls, "__name__", "") == "ControlCoreAdapter":
+        return True
+    return False
 
 
 def unsigned_evidence(record: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +208,29 @@ class ShadowPipeline:
             "mistral_participated": False,
         }
         if live_job_id is not None:
+            requested = str(live_job_id).strip()
+            if not requested:
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "empty_live_job_id",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["empty_live_job_id"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
             if self.adapter is None or not hasattr(self.adapter, "get_job"):
                 return self._seal(
                     {
@@ -284,6 +322,29 @@ class ShadowPipeline:
                         "zwnj_fail": False,
                         "adaeval": {
                             "validation_failures": ["invalid_live_job_shape"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
+            if requested not in {bound["id"], bound["stable_id"]}:
+                # Adapter returned a different job than asked for.
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "live_job_id_mismatch",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["live_job_id_mismatch"],
                             "target_correctness": False,
                         },
                     }

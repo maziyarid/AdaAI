@@ -1,5 +1,36 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T08:55Z — Greptile P1 live-read alias + AAX-8 identity mismatch
+
+**Fetched HEAD:** `e3bd2c7c90ba86c2ad8b171e8f3f806c9749fc49`.
+Greptile independently reviewed that SHA at **3/5** (check completed
+08:46:11Z, check `105869568594`). P1 Security: live-read gate could be
+bypassed by a hostname alias that is not the literal
+`127.0.0.1:8770` / `localhost:8770`. Valid. Did not dismiss.
+
+### Done this session
+- Ada-readonly reconfirm: `ls /usr/local/bin/ada-inspect` → ENOENT.
+  `readOnly` stayed on. Royadarman not used. AAX-3 AC3 still open.
+- P1 fix: `adapter_targets_live_control_core` treats **any** configured
+  `base_url` (and the `ControlCoreAdapter` class) as a live/network
+  target. Hostname aliases, IPv6 loopback, and bearer tokens never
+  reach HTTP when `allow_live_job_read` is false.
+- AAX-8: requested `live_job_id` must match returned `id` or
+  `stable_id` (`live_job_id_mismatch`). Empty ids deny. Mutation
+  families (`wp_publish`, `wp_delete`, `apply_sql`, `POLICY_CHANGE`,
+  `CANONICAL_OWNERSHIP`) stay non-ALLOW with a bound job; rollback is
+  not executed. HMAC fails if `live_job_context` / `live_job_id` is
+  swapped across jobs. Local suite **201 passed**.
+- CI: `e3bd2c7` job `105869561606` still `runner_id=0`, logs 404.
+  Actions page banner: "You can't perform that action at this time."
+  Account/policy restriction, not a pytest failure. Do not rewrite app
+  code.
+- SQL not applied. AAX-8 AC1/AC3/AC4 unchecked. AAX-12/AAX-15 Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T09:05Z — AAX-7 isolated inventory rehearsal + AAX-8 live-adapter deny
 
 **Fetched HEAD:** `27ffc513ef7e9bb68fa7dd988210049646f930d0`.

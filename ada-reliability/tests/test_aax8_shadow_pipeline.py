@@ -329,7 +329,7 @@ def test_tampered_evaluation_verdict_fails_verify():
 def test_tampered_live_job_context_fails_verify():
     """HMAC must bind job-shape fields; flipping them must not still verify."""
     e = fresh()
-    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
     pipe = ShadowPipeline(e, adapter=adapter)
     sealed = pipe.evaluate(
         agent_id="mistral-canary",
@@ -337,7 +337,7 @@ def test_tampered_live_job_context_fails_verify():
         project_id="teznevise",
         site_id="teznevise.ir",
         proposal=PROPOSAL,
-        live_job_id="job-1",
+        live_job_id=MISTRAL_JOB["id"],
     )
     assert pipe.verify_evidence(sealed)
 
@@ -573,7 +573,7 @@ def test_live_job_types_are_bound_from_snapshot_including_mistral_chat():
 def test_adapter_job_read_binds_shape_without_payload_or_live_mistral_claim():
     e = fresh()
     writes = e.wp.writes
-    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
     pipe = ShadowPipeline(e, adapter=adapter)
     trace = pipe.evaluate(
         agent_id="mistral-canary",
@@ -582,7 +582,7 @@ def test_adapter_job_read_binds_shape_without_payload_or_live_mistral_claim():
         site_id="teznevise.ir",
         proposal=PROPOSAL,
         live_schedule_stable_id="schedule:seo-scout",
-        live_job_id="job-1",
+        live_job_id=MISTRAL_JOB["id"],
     )
     assert adapter.reads == 1
     assert trace["evidence_kind"] == "adapter_job_read"
@@ -705,7 +705,7 @@ def test_bound_live_job_id_does_not_grant_wp_publish():
     e = fresh()
     writes = e.wp.writes
     apply_before = getattr(e, "_apply_calls", 0)
-    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
     pipe = ShadowPipeline(e, adapter=adapter)
     publish = {
         "tool": "wp_publish",
@@ -723,7 +723,7 @@ def test_bound_live_job_id_does_not_grant_wp_publish():
         site_id="teznevise.ir",
         proposal=publish,
         live_schedule_stable_id="schedule:seo-scout",
-        live_job_id="job-1",
+        live_job_id=MISTRAL_JOB["id"],
     )
     assert adapter.reads == 1
     assert trace["evidence_kind"] == "adapter_job_read"
@@ -820,3 +820,186 @@ def test_shadow_evaluate_does_not_call_live_control_core_http():
     assert trace["live_job_id"] is None
     assert e.wp.writes == writes
     assert pipe.verify_evidence(trace)
+
+
+def test_hostname_alias_control_core_is_denied_without_http():
+    """Greptile P1: aliases of loopback must not bypass the live-read gate."""
+    e = fresh()
+    writes = e.wp.writes
+    alias = ControlCoreAdapter(
+        ControlCoreConfig(
+            base_url="http://ada-control-core.internal:8770",
+            api_token="SECRET_SHOULD_NOT_LEAVE",
+        )
+    )
+    assert adapter_targets_live_control_core(alias) is True
+    pipe = ShadowPipeline(e, adapter=alias)
+    with patch("adapter.urlopen", side_effect=AssertionError("live HTTP forbidden")):
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id="job-runtime-42",
+        )
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "live_adapter_read_not_authorised"
+    assert trace["live_job_context"] is None
+    assert set(e.tasks) == set()
+    assert e.wp.writes == writes
+    assert "SECRET_SHOULD_NOT_LEAVE" not in str(trace)
+    assert pipe.verify_evidence(trace)
+
+
+def test_any_configured_base_url_is_a_live_target():
+    fake = _ReadAdapter({})
+    assert adapter_targets_live_control_core(fake) is False
+    ipv6 = ControlCoreAdapter(ControlCoreConfig(base_url="http://[::1]:8770"))
+    assert adapter_targets_live_control_core(ipv6) is True
+    named = ControlCoreAdapter(ControlCoreConfig(base_url="https://example.invalid/control"))
+    assert adapter_targets_live_control_core(named) is True
+
+
+def test_empty_live_job_id_is_denied_without_adapter():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    for empty in ("", "   "):
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id=empty,
+        )
+        assert trace["authorization"]["decision"] == "DENY"
+        assert trace["authorization"]["reason"] == "empty_live_job_id"
+        assert set(e.tasks) == set()
+        assert e.wp.writes == writes
+        assert pipe.verify_evidence(trace)
+
+
+def test_adapter_job_identity_mismatch_is_denied():
+    """Lookup key is not durable identity. Returned id/stable_id must match."""
+    e = fresh()
+    writes = e.wp.writes
+    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="job-1",
+    )
+    assert adapter.reads == 1
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "live_job_id_mismatch"
+    assert trace["live_job_context"] is None
+    assert set(e.tasks) == set()
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_stable_id_may_bind_when_it_matches_requested_id():
+    e = fresh()
+    adapter = _ReadAdapter({MISTRAL_JOB["stable_id"]: MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id=MISTRAL_JOB["stable_id"],
+    )
+    assert adapter.reads == 1
+    assert trace["evidence_kind"] == "adapter_job_read"
+    assert trace["live_job_context"]["id"] == MISTRAL_JOB["id"]
+    assert trace["mutated"] is False
+    assert pipe.verify_evidence(trace)
+
+
+def test_bound_job_does_not_grant_mutation_families():
+    families = (
+        ("wp_publish", "PUBLISH"),
+        ("wp_delete", "DELETE"),
+        ("apply_sql", "POLICY_CHANGE"),
+        ("wp_update_metadata", "POLICY_CHANGE"),
+        ("wp_update_metadata", "CANONICAL_OWNERSHIP"),
+    )
+    for tool, mutation_type in families:
+        e = fresh()
+        writes = e.wp.writes
+        apply_before = getattr(e, "_apply_calls", 0)
+        adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
+        pipe = ShadowPipeline(e, adapter=adapter)
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal={
+                "tool": tool,
+                "mutation_type": mutation_type,
+                "payload": {"resource_id": "42", "meta": {"title": "nope"}},
+                "confidence": 0.99,
+            },
+            live_job_id=MISTRAL_JOB["id"],
+        )
+        assert trace["authorization"]["decision"] != "ALLOW", (tool, mutation_type)
+        assert trace["mutated"] is False
+        assert trace["production_mutation"] is False
+        assert trace["production_sql"] is False
+        assert e.wp.writes == writes
+        assert getattr(e, "_apply_calls", 0) == apply_before
+        assert e.tasks[trace["task_id"]]["state"] == "SHADOW"
+        proof = pipe.prove_postcondition(trace)
+        assert proof["postcondition_proven"] is False
+        assert proof["task_completed"] is False
+        rb = pipe.rollback(proof)
+        assert rb["rollback"]["executed"] is False
+        assert e.wp.writes == writes
+        assert pipe.verify_evidence(trace)
+        assert pipe.verify_evidence(proof)
+        assert pipe.verify_evidence(rb)
+
+
+def test_hmac_does_not_verify_after_swapping_live_job_identity():
+    other = dict(MISTRAL_JOB)
+    other["id"] = "22222222-2222-2222-2222-222222222222"
+    other["stable_id"] = "job:other-shape"
+    e = fresh()
+    adapter = _ReadAdapter(
+        {MISTRAL_JOB["id"]: MISTRAL_JOB, other["id"]: other}
+    )
+    pipe = ShadowPipeline(e, adapter=adapter)
+    a = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id=MISTRAL_JOB["id"],
+    )
+    b = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id=other["id"],
+    )
+    assert pipe.verify_evidence(a)
+    assert pipe.verify_evidence(b)
+    swapped = deepcopy(a)
+    swapped["live_job_context"] = dict(b["live_job_context"])
+    assert pipe.verify_evidence(swapped) is False
+    swapped_id = deepcopy(a)
+    swapped_id["live_job_id"] = other["id"]
+    assert pipe.verify_evidence(swapped_id) is False
+    assert pipe.verify_evidence(a)
+

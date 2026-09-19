@@ -1,6 +1,36 @@
 # CI status
 
+## 2026-09-19T08:55Z — runner still unassigned on `e3bd2c7`; account banner
+
+`maziyarid/AdaAI` is **public** (`private=false`, admin on the
+authenticated account). Latest hosted `pytest` checks on
+`e3bd2c7c90ba86c2ad8b171e8f3f806c9749fc49`:
+
+- pull_request run `35432535461` job `105869561606` (~1s, `conclusion=failure`)
+- push run `35432533441` job `105869555949` (~3s, `conclusion=failure`)
+- Job JSON: `runner_id=0`, `runner_name=""`, `runner_group_id=0`
+- `get_job_logs` for job `105869561606`: **HTTP 404** (no log archive;
+  checkout never started)
+- Greptile Review check `105869568594` on the same SHA: **success**
+  as a check, independent score **3/5** with a P1 live-read alias
+  (fixed on the following commit)
+
+Workflow `ada-reliability.yml` is `state=active`, `runs-on:
+ubuntu-latest`. Repo Actions is enabled. 0 self-hosted runners.
+
+New evidence: GitHub Actions index shows the account banner
+**"You can't perform that action at this time."** Combined with
+`runner_id=0` + logs 404, this is an account/security or abuse hold
+on GitHub-hosted runner assignment, not a failing suite.
+
+Do not rewrite Ada application code for `runner_id=0`. Human check
+remains GitHub account Actions / billing / abuse.
+
+Local suite on this tree is the proof.
+
+
 ## 2026-09-19T09:05Z — runner still unassigned on `27ffc51`
+
 
 `maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
 `27ffc513ef7e9bb68fa7dd988210049646f930d0`:
