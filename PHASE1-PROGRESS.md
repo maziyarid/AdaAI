@@ -1,5 +1,30 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T08:40Z — AAX-8 bound job id does not grant wp_publish
+
+**Fetched HEAD:** `d7537cada013e278552354411ac09707562ec30d`.
+Greptile independently reviewed that SHA at **5/5** (check completed
+08:25:18Z). No new P0/P1. PR #2 open, not merged,
+`mergeable_state=unstable`.
+
+### Done this session
+- Ada-readonly reconfirm: `/usr/local/bin/ada-inspect` still ENOENT.
+  `readOnly` stayed on. Royadarman not used. AAX-3 AC3 still open.
+- AAX-8: bound `live_job_id` (fake adapter, `mistral.chat` identity)
+  plus a `wp_publish` proposal is still DENY. No WordPress write, no
+  apply, task stays SHADOW, postcondition not proven, rollback not
+  executed, job payload not copied, HMAC covers the evidence. Local
+  suite **188 passed**.
+- This remains repository/adapter-read proof. Do **not** check AAX-8
+  AC1/AC3/AC4.
+- Hosted Actions on `d7537ca` still fail in ~2s (`runner_id=0`, job
+  `105867421213`). Do not rewrite app code for this.
+- SQL not applied. AAX-12/AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T08:25Z — AAX-8 read-only live job shape (not AC1)
 
 **Fetched HEAD:** `ae4fd13af8b137e3f39bdc0cb19cac583960762a`.

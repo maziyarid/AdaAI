@@ -696,3 +696,66 @@ def test_repository_shadow_never_claims_live_mistral():
     assert trace["live_mistral_job"] is False
     assert trace["mistral_participated"] is False
     assert trace["live_job_context"] is None
+
+
+def test_bound_live_job_id_does_not_grant_wp_publish():
+    """A resolved live_job_id must never authorize a production mutation."""
+    e = fresh()
+    writes = e.wp.writes
+    apply_before = getattr(e, "_apply_calls", 0)
+    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    publish = {
+        "tool": "wp_publish",
+        "mutation_type": "PUBLISH",
+        "payload": {
+            "resource_id": "42",
+            "meta": {"title": "proposed-publish"},
+        },
+        "confidence": 0.99,
+    }
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=publish,
+        live_schedule_stable_id="schedule:seo-scout",
+        live_job_id="job-1",
+    )
+    assert adapter.reads == 1
+    assert trace["evidence_kind"] == "adapter_job_read"
+    assert trace["live_job_context"]["job_type"] == "mistral.chat"
+    assert trace["live_job_context"]["payload_copied"] is False
+    assert "payload_json" not in trace["live_job_context"]
+    assert "api_key" not in str(trace["live_job_context"])
+    assert "do-not-copy" not in str(trace)
+    assert "SECRET_SHOULD_NOT_BE_COPIED" not in str(trace["live_job_context"])
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["mutated"] is False
+    assert trace["production_mutation"] is False
+    assert trace["production_sql"] is False
+    assert trace["live_mistral_job"] is False
+    assert trace["mistral_participated"] is False
+    assert e.wp.writes == writes
+    assert getattr(e, "_apply_calls", 0) == apply_before
+    assert e.tasks[trace["task_id"]]["state"] == "SHADOW"
+    live = e.wp.read("teznevise.ir", "42")
+    assert live.meta["yoast_title"] == "خدمات نگارش"
+    assert pipe.verify_evidence(trace)
+
+    proof = pipe.prove_postcondition(trace)
+    assert proof["postcondition_proven"] is False
+    assert proof["task_completed"] is False
+    assert proof["task_state"] == "SHADOW"
+    assert proof["rollback"]["executed"] is False
+    assert proof["authorization"]["decision"] == "DENY"
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(proof)
+
+    rb = pipe.rollback(proof)
+    assert rb["authorization"]["decision"] == "DENY"
+    assert rb["rollback"]["executed"] is False
+    assert rb["production_mutation"] is False
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(rb)
