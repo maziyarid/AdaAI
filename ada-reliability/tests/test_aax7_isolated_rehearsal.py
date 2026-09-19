@@ -163,6 +163,17 @@ def test_rehearsal_script_requires_disposable_instance_marker(tmp_path, monkeypa
     monkeypatch.delenv("ADA_REHEARSAL_MARKER", raising=False)
 
 
+def test_skip_locked_probe_confirms_lock_before_competing_select():
+    script = (ROOT / "ada-reliability" / "scripts" / "isolated_mariadb_rehearsal.py").read_text(
+        encoding="utf-8"
+    )
+    assert "IS_USED_LOCK" in script
+    assert "GET_LOCK" in script
+    assert "time.sleep(0.35)" not in script
+    assert "lock_deadline = time.monotonic()" in script
+    assert '"--no-defaults"' in script
+
+
 def test_isolated_mariadb_report_preserves_control_core_behaviour():
     report = json.loads(REPORT.read_text(encoding="utf-8"))
     assert report["production"] is False

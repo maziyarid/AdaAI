@@ -109,7 +109,7 @@ def client_bin() -> str:
 
 
 def run_sql(client: str, sock: Path, sql: str, db: str | None = None) -> str:
-    cmd = [client, f"--socket={sock}", "-N", "-B", "--batch"]
+    cmd = [client, "--no-defaults", f"--socket={sock}", "-N", "-B", "--batch"]
     if db:
         cmd += ["-D", db]
     proc = subprocess.run(cmd, input=sql, text=True, capture_output=True)
@@ -119,7 +119,7 @@ def run_sql(client: str, sock: Path, sql: str, db: str | None = None) -> str:
 
 
 def source_file(client: str, sock: Path, db: str, path: Path) -> None:
-    cmd = [client, f"--socket={sock}", "-D", db]
+    cmd = [client, "--no-defaults", f"--socket={sock}", "-D", db]
     proc = subprocess.run(cmd, input=path.read_text(encoding="utf-8"), text=True, capture_output=True)
     if proc.returncode != 0:
         fail(f"source {path.name} failed: {proc.stderr.strip()}")
@@ -213,7 +213,7 @@ INSERT INTO audit_log (
 
 
 def expect_error(client: str, sock: Path, db: str, sql: str, needle: str) -> str:
-    cmd = [client, f"--socket={sock}", "-D", db]
+    cmd = [client, "--no-defaults", f"--socket={sock}", "-D", db]
     proc = subprocess.run(cmd, input=sql, text=True, capture_output=True)
     blob = (proc.stderr or "") + (proc.stdout or "")
     if proc.returncode == 0:
@@ -316,17 +316,46 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
            LIMIT 1;""",
         db,
     ).strip()
+    # Synchronize on an advisory lock acquired only after the row-level
+    # FOR UPDATE succeeds. This proves the holder owns order_job_a before
+    # the competing SKIP LOCKED selector runs; a fixed startup delay can
+    # race under host load and produce false rehearsal failures.
+    lock_name = f"ada_rehearsal_{label}_{os.getpid()}"
     holder_sql = (
         f"START TRANSACTION; SELECT id FROM jobs WHERE id='{order_job_a}' FOR UPDATE; "
-        "SELECT SLEEP(2); COMMIT;"
+        f"SELECT GET_LOCK('{lock_name}',0); "
+        "SELECT SLEEP(2); "
+        f"SELECT RELEASE_LOCK('{lock_name}'); COMMIT;"
     )
     holder = subprocess.Popen(
-        [client, f"--socket={sock}", "-N", "-B", "-D", db, "-e", holder_sql],
+        [client, "--no-defaults", f"--socket={sock}", "-N", "-B", "-D", db, "-e", holder_sql],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(0.35)
+    lock_owner = "0"
+    lock_deadline = time.monotonic() + 2.0
+    while time.monotonic() < lock_deadline:
+        if holder.poll() is not None:
+            _hout, herr = holder.communicate()
+            fail("SKIP LOCKED holder exited before lock confirmation: " + herr.strip())
+        lock_owner = run_sql(
+            client,
+            sock,
+            f"SELECT COALESCE(IS_USED_LOCK('{lock_name}'),0);",
+            db,
+        ).strip()
+        if lock_owner not in {"", "0"}:
+            break
+        time.sleep(0.05)
+    if lock_owner in {"", "0"}:
+        holder.terminate()
+        try:
+            _hout, herr = holder.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            _hout, herr = holder.communicate(timeout=2)
+        fail("SKIP LOCKED holder did not confirm row-lock acquisition: " + herr.strip())
     skip_locked_selected = run_sql(
         client,
         sock,
