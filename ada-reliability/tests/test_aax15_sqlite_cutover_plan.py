@@ -150,3 +150,79 @@ def test_conflicting_payload_and_explicit_job_binding_is_refused(tmp_path):
         assert "stable-2" in str(exc)
     else:
         raise AssertionError("conflicting durable job bindings must be refused")
+
+
+def test_verified_external_sync_delegation_removes_second_replay_authority(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    plan = cutover.build_plan(
+        db,
+        external_sync_delegations={"stable-2": "agiflow:stable-2"},
+    )
+    assert plan["cutover_ready_for_approved_maintenance_window"] is True
+    assert plan["preconditions"]["missing_durable_job_bindings"] == []
+    assert plan["preconditions"]["delegated_external_sync_rows"] == ["stable-2"]
+    parked = next(r for r in plan["target"]["rows"] if r["lifecycle"] == "parked")
+    assert parked["mutation_kind"] == "none"
+    assert parked["durable_job_id"] is None
+    assert parked["external_sync_state"] == "delegated_control_core"
+    assert (
+        parked["payload"]["_legacy_pd_outbox"]["delegated_external_sync_stable_id"]
+        == "agiflow:stable-2"
+    )
+
+
+def test_external_sync_delegation_requires_bridge_stable_id_shape(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:wrong-row"},
+        )
+    except cutover.CutoverError as exc:
+        assert "stable_id mismatch" in str(exc)
+    else:
+        raise AssertionError("mismatched control-core stable_id must be refused")
+
+
+def test_external_sync_delegation_only_applies_to_agiflow_rows(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-1": "agiflow:stable-1"},
+        )
+    except cutover.CutoverError as exc:
+        assert "only valid for agiflow_sync" in str(exc)
+    else:
+        raise AssertionError("non-Agiflow delegation must be refused")
+
+
+def test_job_binding_and_external_delegation_are_mutually_exclusive(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            {"stable-2": "job-2"},
+            {"stable-2": "agiflow:stable-2"},
+        )
+    except cutover.CutoverError as exc:
+        assert "both durable job binding and external-sync delegation" in str(exc)
+    else:
+        raise AssertionError("dual recovery authority must be refused")
+
+
+def test_long_legacy_external_sync_state_is_preserved_losslessly(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3", states=("succeeded",))
+    long_state = "AGIFLOW_SYNCED:01M2TYP2YH67RKF7V5MRGJCK0N"
+    c = sqlite3.connect(db)
+    c.execute(
+        "UPDATE pd_outbox SET external_sync_state=? WHERE stable_id='stable-1'",
+        (long_state,),
+    )
+    c.commit()
+    c.close()
+    plan = cutover.build_plan(db)
+    row = plan["target"]["rows"][0]
+    assert row["external_sync_state"] == "agiflow_synced"
+    assert len(row["external_sync_state"]) <= 32
+    assert row["payload"]["_legacy_pd_outbox"]["external_sync_state"] == long_state

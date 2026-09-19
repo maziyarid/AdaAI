@@ -60,7 +60,26 @@ def parse_payload(raw: str | None) -> dict:
     return obj
 
 
-def mutation_kind(event_type: str, state: str) -> str:
+def normalise_external_sync_state(raw: str | None, delegated: bool = False) -> str:
+    value = str(raw or "").strip()
+    if delegated:
+        return "delegated_control_core"
+    if not value:
+        return "none"
+    if value.startswith("AGIFLOW_SYNCED:"):
+        return "agiflow_synced"
+    if value.startswith("CONTROL_CORE_PENDING:"):
+        return "control_core_pending"
+    if len(value) <= 32:
+        return value
+    return "legacy_external_state"
+
+
+def mutation_kind(event_type: str, state: str, delegated: bool = False) -> str:
+    # Coordination work already durably delegated to control-core external sync
+    # must not become a second executable AAX-15 replay item.
+    if delegated:
+        return "none"
     # Only the currently parked live class must retain executable replay meaning.
     # Terminal rows are historical evidence and must never become replayable by import.
     if state == "parked" and event_type == "agiflow_sync":
@@ -68,11 +87,17 @@ def mutation_kind(event_type: str, state: str) -> str:
     return "none"
 
 
-def map_outbox_row(row: dict, job_bindings: dict[str, str] | None = None) -> dict:
+def map_outbox_row(
+    row: dict,
+    job_bindings: dict[str, str] | None = None,
+    external_sync_delegations: dict[str, str] | None = None,
+) -> dict:
     state = str(row["state"])
     stable_id = str(row["stable_id"])
     payload = parse_payload(row.get("payload_json"))
     job_bindings = job_bindings or {}
+    external_sync_delegations = external_sync_delegations or {}
+    delegation = str(external_sync_delegations.get(stable_id) or "").strip() or None
     payload_job_id = str(payload.get("durable_job_id") or "").strip()
     durable_job_id = str(job_bindings.get(stable_id) or payload_job_id or "").strip() or None
     payload = {
@@ -83,6 +108,8 @@ def map_outbox_row(row: dict, job_bindings: dict[str, str] | None = None) -> dic
             "completed_at": row.get("completed_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+            "external_sync_state": row.get("external_sync_state") or "",
+            "delegated_external_sync_stable_id": delegation,
         },
     }
     return {
@@ -106,8 +133,12 @@ def map_outbox_row(row: dict, job_bindings: dict[str, str] | None = None) -> dic
         "last_failed_at": row.get("last_failed_at"),
         "next_retry_at": row.get("next_eligible_at") or None,
         "reset_condition": row.get("reset_condition") or None,
-        "external_sync_state": row.get("external_sync_state") or "none",
-        "mutation_kind": mutation_kind(str(row.get("event_type") or ""), state),
+        "external_sync_state": normalise_external_sync_state(
+            row.get("external_sync_state"), delegated=bool(delegation)
+        ),
+        "mutation_kind": mutation_kind(
+            str(row.get("event_type") or ""), state, delegated=bool(delegation)
+        ),
         "mutation_idempotency_key": str(row["idempotency_key"]),
         "sync_marker": stable_id[:96],
         "payload": payload,
@@ -121,7 +152,11 @@ def map_outbox_row(row: dict, job_bindings: dict[str, str] | None = None) -> dic
     }
 
 
-def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) -> dict:
+def build_plan(
+    sqlite_path: Path,
+    job_bindings: dict[str, str] | None = None,
+    external_sync_delegations: dict[str, str] | None = None,
+) -> dict:
     if not sqlite_path.is_file():
         raise CutoverError(f"SQLite source not found: {sqlite_path}")
     uri = "file:" + str(sqlite_path.resolve()) + "?mode=ro"
@@ -171,11 +206,42 @@ def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) ->
         raise CutoverError("pd_outbox uniqueness invariant violated")
 
     job_bindings = job_bindings or {}
+    external_sync_delegations = external_sync_delegations or {}
     unknown_bindings = sorted(set(job_bindings) - set(stable))
     if unknown_bindings:
         raise CutoverError(
             "job binding supplied for unknown stable_id(s): " + ",".join(unknown_bindings)
         )
+
+    unknown_delegations = sorted(set(external_sync_delegations) - set(stable))
+    if unknown_delegations:
+        raise CutoverError(
+            "external-sync delegation supplied for unknown stable_id(s): "
+            + ",".join(unknown_delegations)
+        )
+
+    overlap = sorted(set(job_bindings) & set(external_sync_delegations))
+    if overlap:
+        raise CutoverError(
+            "row cannot have both durable job binding and external-sync delegation: "
+            + ",".join(overlap)
+        )
+
+    by_stable = {str(r["stable_id"]): r for r in outbox}
+    for stable_id, external_stable in external_sync_delegations.items():
+        row = by_stable[stable_id]
+        if str(row.get("event_type") or "") != "agiflow_sync":
+            raise CutoverError(
+                "external-sync delegation is only valid for agiflow_sync row: " + stable_id
+            )
+        expected = "agiflow:" + stable_id
+        if str(external_stable).strip() != expected:
+            raise CutoverError(
+                "external-sync delegation stable_id mismatch for "
+                + stable_id
+                + ": expected="
+                + expected
+            )
 
     for row in outbox:
         stable_id = str(row["stable_id"])
@@ -191,7 +257,10 @@ def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) ->
                 + explicit
             )
 
-    mapped = [map_outbox_row(r, job_bindings) for r in outbox]
+    mapped = [
+        map_outbox_row(r, job_bindings, external_sync_delegations)
+        for r in outbox
+    ]
     missing_job_bindings = sorted(
         row["sync_marker"]
         for row in mapped
@@ -226,6 +295,7 @@ def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) ->
             "encrypted_backup_and_off_host_key_required": True,
             "runtime_writer_switch_required_before_reenable": True,
             "missing_durable_job_bindings": missing_job_bindings,
+            "delegated_external_sync_rows": sorted(external_sync_delegations),
         },
         "target": {
             "migration": "006_ada_failed_run_outbox.sql",
@@ -250,8 +320,16 @@ def main() -> int:
         metavar="STABLE_ID=DURABLE_JOB_ID",
         help="Explicit durable control-core job binding for replayable legacy Agiflow rows.",
     )
+    ap.add_argument(
+        "--external-sync-delegation",
+        action="append",
+        default=[],
+        metavar="STABLE_ID=CONTROL_CORE_STABLE_ID",
+        help="Verified legacy Agiflow row already owned by control-core pending_external_sync.",
+    )
     args = ap.parse_args()
     bindings: dict[str, str] = {}
+    delegations: dict[str, str] = {}
     try:
         for raw in args.job_binding:
             stable_id, sep, job_id = raw.partition("=")
@@ -261,7 +339,17 @@ def main() -> int:
             if stable_id in bindings and bindings[stable_id] != job_id:
                 raise CutoverError("conflicting --job-binding for " + stable_id)
             bindings[stable_id] = job_id
-        plan = build_plan(args.sqlite, bindings)
+        for raw in args.external_sync_delegation:
+            stable_id, sep, external_stable = raw.partition("=")
+            stable_id, external_stable = stable_id.strip(), external_stable.strip()
+            if not sep or not stable_id or not external_stable:
+                raise CutoverError(
+                    "--external-sync-delegation must be STABLE_ID=CONTROL_CORE_STABLE_ID"
+                )
+            if stable_id in delegations and delegations[stable_id] != external_stable:
+                raise CutoverError("conflicting --external-sync-delegation for " + stable_id)
+            delegations[stable_id] = external_stable
+        plan = build_plan(args.sqlite, bindings, delegations)
     except (CutoverError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2

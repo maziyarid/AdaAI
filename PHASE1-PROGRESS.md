@@ -1,3 +1,10 @@
+## 2026-09-19 — AAX-15 delegated coordination handoff hardening
+
+- Read-only control-core API verification proved that a parked legacy agiflow_sync can already have a durable pending_external_sync owner. Such rows must not be imported as a second executable failed-run replay.
+- Cutover planner now supports explicit, verified bridge delegation (agiflow:<legacy stable_id>), keeps the legacy row parked as evidence with mutation_kind=none, and refuses dual job-binding plus delegation authority.
+- Live SQLite inspection also exposed 41–62 character legacy external-sync markers versus migration 006 VARCHAR(32). Planner now normalises target markers and preserves the full original value in JSON evidence.
+- Focused AAX-15 tests: 12 passed. Full reliability suite: 253 passed. No production SQL/mutation.
+
 ## 2026-09-19 — AAX-11 staged dispatcher supervision
 
 - Added a repository-only systemd supervision package under `ops/portfolio-dispatcher/`; no unit was installed, enabled or started.

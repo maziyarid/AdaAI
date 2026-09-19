@@ -37,4 +37,11 @@ The cutover sequence is: quiesce every SQLite producer/claimer; run the read-onl
 
 `pd_worker_runs` remains historical run evidence after cutover and must not become a second replay authority. Successful-run history does not need to be copied into `ada_failed_runs`, whose scope is failed/pending execution recovery.
 
-Current live planning snapshot on 2026-09-19: 10 `succeeded`, 1 `parked`, zero observed `retryable`/`inflight` rows. This is favourable for planning but is not an Apply grant; it must be rechecked immediately before an approved cutover. The parked `agiflow_sync` row must also have a real durable control-core job binding before cutover can be ready. The current live row `pdobx_drbevidence_task23_20260918` has no such binding in its SQLite payload, so the current snapshot is intentionally reported NOT ready until an operator supplies a verified mapping or resolves/retires that legacy recovery item.
+Current live planning snapshot on 2026-09-19: 10 succeeded, 1 parked, zero observed retryable/inflight rows. The default plan correctly remains not ready when the parked Agiflow row has neither a durable job binding nor a verified delegation. Read-only control-core verification subsequently proved that this coordination item already has a unique pending_external_sync handoff with the same idempotency key, so an explicitly verified external-sync delegation can make the cutover plan ready without inventing a job ID. This is still planning evidence, not an Apply grant, and must be reverified immediately before cutover.
+
+
+### Legacy coordination delegation
+
+A legacy SQLite pd_outbox row whose sole executable action is agiflow_sync does not need to become a second AAX-15 replay item when the same action has already been durably accepted by control-core pending_external_sync. In that case, verify the bridge-generated stable ID and idempotency key against control-core, record the delegation explicitly in the cutover plan, and import the legacy row only as non-executable historical evidence (mutation_kind=none). Control-core external-sync owns delivery; AAX-15 must not replay the same comment independently.
+
+The planner also normalises legacy external-sync status markers to fit migration 006's 32-character target column while retaining the full original marker in JSON evidence.
