@@ -1,5 +1,31 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T07:35Z — AAX-8 signed evidence; schema still blocked
+
+**Fetched HEAD:** `ca08ec64ba5e0344158e8a5ff4021ba6772de25c`.
+Greptile Review check **in_progress** on that SHA (no P0/P1 published). Last completed Greptile 5/5 remains `d7e41a6`. PR #2 open, not merged.
+
+### Done this session
+- Ada-readonly reconfirm: `ada-inspect` still ENOENT on `server.maziyarid.com`.
+  `readOnly` stayed on. Royadarman not used. AAX-3 AC3 still open.
+- AAX-8: HMAC-seal shadow evidence (`hmac-sha256` + `key_id`). Unknown
+  `live_schedule_stable_id` DENY without creating an engine task (no
+  invented second scheduler). `wp_publish` DENY, no FakeWordPress writes.
+  Adapter may `get_job`/`health`; `claim_job` / `release_due_schedules`
+  forbidden. Tampered evidence fails verify.
+- Local suite **173 passed**. SQL not applied.
+
+### Not done
+- AAX-3 AC3 live `SHOW TABLES`.
+- Hosted Actions still `runner_id=0`.
+- Production SQL. Merge. Deploy. Live Mistral/Teznevise canary.
+- AAX-12 / AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
+
 ## 2026-09-19T07:15Z — AAX-8 in-repo shadow pipeline; AAX-7 source map
 
 **Fetched HEAD:** `d7e41a6c2d8fbf64e0e8de740f74bd77976ebb19` (unchanged until this push).

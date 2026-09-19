@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from .crypto import hmac_sign, hmac_verify
 from .engine import AdaEngine, AdaError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -26,11 +27,14 @@ LIVE_SEEDED_SCHEDULES = (
     ("schedule:temp-tool-harvester", "TEMP_TOOL_HARVESTER", "temp_tool_harvester.run", 900),
     ("schedule:oracle-daily", "ORACLE_FORECASTER", "oracle_forecaster.run", 86400),
 )
+KNOWN_SCHEDULE_IDS = frozenset(row[0] for row in LIVE_SEEDED_SCHEDULES)
 
-# Adapter may only read. A write method appearing here is a contract break.
+# Adapter may only read. A write/lease/SQL method appearing here is a contract break.
 FORBIDDEN_ADAPTER_ATTRS = (
     "create_schedule",
     "acquire_lease",
+    "claim_job",
+    "release_due_schedules",
     "enqueue",
     "enqueue_local",
     "create_job",
@@ -48,6 +52,23 @@ def assert_adapter_is_read_only(adapter: Any) -> None:
             raise AdaError("SHADOW_ADAPTER_WRITES", name)
 
 
+def unsigned_evidence(record: dict[str, Any]) -> dict[str, Any]:
+    """Stable fields hashed for the evidence HMAC. Signature itself is excluded."""
+    return {
+        "pipeline": record.get("pipeline"),
+        "mode": record.get("mode"),
+        "mutated": record.get("mutated"),
+        "receipt_id": record.get("receipt_id"),
+        "task_id": record.get("task_id"),
+        "authorization": record.get("authorization"),
+        "live_schedule_stable_id": record.get("live_schedule_stable_id"),
+        "production_sql": record.get("production_sql"),
+        "production_mutation": record.get("production_mutation"),
+        "zwnj_fail": record.get("zwnj_fail"),
+        "qalam_ok": record.get("qalam_ok"),
+    }
+
+
 class ShadowPipeline:
     """bootstrap → inspect → propose → validate → authorize → record → STOP."""
 
@@ -57,6 +78,20 @@ class ShadowPipeline:
         self.evidence: list[dict[str, Any]] = []
         if adapter is not None:
             assert_adapter_is_read_only(adapter)
+
+    def _seal(self, record: dict[str, Any]) -> dict[str, Any]:
+        body = unsigned_evidence(record)
+        record["evidence_alg"] = "hmac-sha256"
+        record["evidence_key_id"] = self.engine.key_id
+        record["evidence_hmac"] = hmac_sign(body, self.engine.hmac_key)
+        self.evidence.append(record)
+        return record
+
+    def verify_evidence(self, record: dict[str, Any]) -> bool:
+        sig = record.get("evidence_hmac")
+        if not sig or not isinstance(sig, str):
+            return False
+        return hmac_verify(unsigned_evidence(record), sig, self.engine.hmac_key)
 
     def evaluate(
         self,
@@ -69,6 +104,31 @@ class ShadowPipeline:
         risk_class: str = "low",
         live_schedule_stable_id: Optional[str] = None,
     ) -> dict[str, Any]:
+        if (
+            live_schedule_stable_id is not None
+            and live_schedule_stable_id not in KNOWN_SCHEDULE_IDS
+        ):
+            # Do not invent a schedule. Do not call the engine. Record DENY.
+            return self._seal(
+                {
+                    "pipeline": "AAX-8",
+                    "mode": "SHADOW",
+                    "mutated": False,
+                    "production_sql": False,
+                    "production_mutation": False,
+                    "live_schedule_stable_id": live_schedule_stable_id,
+                    "authorization": {
+                        "decision": "DENY",
+                        "reason": "unknown_live_schedule",
+                    },
+                    "qalam_ok": False,
+                    "zwnj_fail": False,
+                    "adaeval": {
+                        "validation_failures": ["unknown_live_schedule"],
+                        "target_correctness": False,
+                    },
+                }
+            )
         writes_before = int(getattr(self.engine.wp, "writes", 0) or 0)
         apply_calls_before = getattr(self.engine, "_apply_calls", 0)
         trace = self.engine.shadow_mistral(
@@ -85,12 +145,12 @@ class ShadowPipeline:
             raise AdaError("SHADOW_WP_WRITE", "WordPress write during shadow")
         if getattr(self.engine, "_apply_calls", 0) != apply_calls_before:
             raise AdaError("SHADOW_APPLY", "apply_authorized_mutation during shadow")
-        record = {
-            **trace,
-            "pipeline": "AAX-8",
-            "live_schedule_stable_id": live_schedule_stable_id,
-            "production_sql": False,
-            "production_mutation": False,
-        }
-        self.evidence.append(record)
-        return record
+        return self._seal(
+            {
+                **trace,
+                "pipeline": "AAX-8",
+                "live_schedule_stable_id": live_schedule_stable_id,
+                "production_sql": False,
+                "production_mutation": False,
+            }
+        )

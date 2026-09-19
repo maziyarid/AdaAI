@@ -10,7 +10,7 @@ from .agiflow_steward import (
 from .failed_run_outbox import FailedRunOutbox, RunStatus
 from .engine import AdaEngine, AdaError, seed_phase1
 from .mutations import apply_authorized_mutation, journal_intent
-from .shadow_pipeline import ShadowPipeline, assert_adapter_is_read_only
+from .shadow_pipeline import ShadowPipeline
 
 __all__ = [
     "AdaEngine",
@@ -23,7 +23,6 @@ __all__ = [
     "FailedRunOutbox",
     "RunStatus",
     "ShadowPipeline",
-    "assert_adapter_is_read_only",
     "seed_phase1",
     "journal_intent",
     "apply_authorized_mutation",

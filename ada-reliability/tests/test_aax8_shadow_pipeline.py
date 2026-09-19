@@ -8,13 +8,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "runtime" / "control-core-baseline"))
 
 from adapter import ControlCoreAdapter, ControlCoreConfig
+from ada_reliability.crypto import hmac_verify
 from ada_reliability.engine import AdaEngine, AdaError, IDENTITIES, ZWNJ, seed_phase1
 from ada_reliability.shadow_pipeline import (
     FORBIDDEN_ADAPTER_ATTRS,
+    KNOWN_SCHEDULE_IDS,
     LIVE_SEEDED_SCHEDULES,
     LIVE_SOURCE,
     ShadowPipeline,
     assert_adapter_is_read_only,
+    unsigned_evidence,
 )
 
 HMAC = "phase1-test-hmac-key-must-be-32+"
@@ -42,9 +45,11 @@ def test_live_snapshot_schedules_are_bound_and_not_a_second_scheduler():
         assert job_type in src
         assert str(interval) in src
     assert "CREATE TABLE IF NOT EXISTS schedules" in src
+    assert KNOWN_SCHEDULE_IDS == {row[0] for row in LIVE_SEEDED_SCHEDULES}
     pipe = ShadowPipeline(fresh())
     assert not hasattr(pipe, "create_schedule")
     assert not hasattr(pipe, "acquire_lease")
+    assert not hasattr(pipe, "claim_job")
 
 
 def test_adapter_remains_read_only():
@@ -52,6 +57,8 @@ def test_adapter_remains_read_only():
     assert_adapter_is_read_only(a)
     for name in FORBIDDEN_ADAPTER_ATTRS:
         assert not hasattr(a, name)
+    assert hasattr(a, "get_job")  # read of a durable job is allowed
+    assert hasattr(a, "health")
 
 
 def test_shadow_evaluate_consumes_context_and_does_not_mutate():
@@ -77,6 +84,8 @@ def test_shadow_evaluate_consumes_context_and_does_not_mutate():
     assert trace["adaeval"]["target_correctness"] is True
     assert trace["live_schedule_stable_id"] == "schedule:seo-scout"
     assert pipe.evidence[-1]["receipt_id"]
+    assert pipe.verify_evidence(trace)
+    assert hmac_verify(unsigned_evidence(trace), trace["evidence_hmac"], HMAC)
 
 
 def test_shadow_wrong_site_is_denied_and_still_does_not_write():
@@ -93,6 +102,7 @@ def test_shadow_wrong_site_is_denied_and_still_does_not_write():
     assert trace["mutated"] is False
     assert trace["authorization"]["decision"] == "DENY"
     assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
 
 
 def test_shadow_zwnj_proposal_is_recorded_not_applied():
@@ -113,6 +123,7 @@ def test_shadow_zwnj_proposal_is_recorded_not_applied():
     assert "teznevise_zwnj" in trace["adaeval"]["validation_failures"]
     assert trace["mutated"] is False
     assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
 
 
 def test_expired_receipt_fail_closed_in_shadow_clock():
@@ -181,3 +192,64 @@ def test_pipeline_has_no_apply_or_sql_surface():
 
         assert_adapter_is_read_only(_Writer())
     assert ei.value.code == "SHADOW_ADAPTER_WRITES"
+
+
+def test_unknown_live_schedule_is_denied_without_engine_task():
+    e = fresh()
+    writes = e.wp.writes
+    tasks_before = set(e.tasks)
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:invented-second-scheduler",
+    )
+    assert trace["mutated"] is False
+    assert trace["production_mutation"] is False
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "unknown_live_schedule"
+    assert e.wp.writes == writes
+    assert set(e.tasks) == tasks_before
+    assert pipe.verify_evidence(trace)
+
+
+def test_shadow_publish_is_denied_and_does_not_write():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal={
+            "tool": "wp_publish",
+            "mutation_type": "PUBLISH",
+            "payload": {"resource_id": "42", "meta": {}},
+            "confidence": 0.99,
+        },
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert trace["mutated"] is False
+    assert trace["authorization"]["decision"] == "DENY"
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_tampered_shadow_evidence_fails_verify():
+    e = fresh()
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert pipe.verify_evidence(trace)
+    trace["mutated"] = True
+    assert pipe.verify_evidence(trace) is False
