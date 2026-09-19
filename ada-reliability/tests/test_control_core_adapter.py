@@ -38,6 +38,10 @@ def test_preserved_behavior_map_is_complete():
     assert PRESERVED_BEHAVIOR["service"] == "maziyar-control-core.service"
     assert PRESERVED_BEHAVIOR["health_unauthenticated_status"] == 401
     assert PRESERVED_BEHAVIOR["health_endpoint_public"] is False
+    assert PRESERVED_BEHAVIOR["source_bytes"] == 65370
+    assert PRESERVED_BEHAVIOR["source_sha256_captured_bytes"] == (
+        "aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3"
+    )
 
 
 def test_adapter_does_not_bind_a_second_scheduler():

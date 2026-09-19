@@ -279,6 +279,48 @@ probes never reach it. `BLACKOUT_SENTINEL` interval is 300 seconds.
    (AAX-5).
 5. Do not clear viewer `readOnly` to bypass the current MCP classifier.
 
+## Session addendum 2026-09-19T06:42Z — live source imported (AC2)
+
+Add A profile `grok-ada-readonly` allowed a single `cat` of
+`/opt/maziyar-control-core/control_core.py`. Combined `&&` commands
+are still classified as non-readonly. `readOnly` stayed on. Royadarman
+was not used.
+
+Imported into the repo (no secrets, no env file, no `state/`):
+
+- `runtime/control-core-baseline/live/control_core.py`
+- `runtime/control-core-baseline/live/maziyar-control-core.service`
+- `runtime/control-core-baseline/live/MANIFEST.json`
+
+Capture facts:
+
+- 65370 bytes / 1096 lines (matches prior `wc`)
+- SHA-256 of captured bytes
+  `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`
+- Host `sha256sum` still POLICY_DENIED — this is **not** the inode hash
+- `clickup_state_steward.py`: Permission denied
+- `ada-inspect`: still absent
+
+Source contracts now in-repo (tests parse the snapshot):
+
+- 20 `CREATE TABLE` names; **no `ada_*` / `pd_worker_runs` / `pd_outbox`**
+- `create_job` `INSERT IGNORE` on unique `idempotency_key`
+- `claim_job` `FOR UPDATE SKIP LOCKED` + expired-lease reclaim
+- `pending_external_sync` leased SKIP LOCKED outbox
+- `seed_schedules` six rows (BLACKOUT_SENTINEL 300 … ORACLE 86400)
+- `API.auth()` Bearer `CONTROL_API_TOKEN` **before** `/health` 200 JSON
+- `HEALTH_TARGETS` control-core expected 401 unchanged
+- credentials only via `os.environ` / `os.getenv`
+
+**AC2:** satisfied as a secret-free baseline of service/runtime, schema
+*shape*, seeded schedules, and captured-byte source hash.
+
+**AC3:** still unchecked. Source has no `ada_*` names. That is not
+live `SHOW TABLES`. Do not apply SQL.
+
+No production mutation. PR not merged.
+
+
 ## Session addendum 2026-09-19T23:20Z (fresh Grok account, HEAD `7953eab`)
 
 Independent fetch confirmed remote HEAD is still

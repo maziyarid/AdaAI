@@ -46,7 +46,7 @@ The current production host is about 4 vCPU / 3.6 GiB RAM with no NVIDIA GPU run
 
 - `ada-reliability/` — Phase-1 executable contract (bootstrap, receipts, authorize, approvals, journal, ZWNJ validator, Mistral shadow, Agiflow projection steward, failed-run outbox). Tests do not require MariaDB.
 - `ada-reliability/sql/mariadb/` — additive `ada_*` tables for the live MariaDB instance.
-- `runtime/control-core-baseline/` — client adapter + captured behavior. Live `/opt/maziyar-control-core` import is blocked until VPS access.
+- `runtime/control-core-baseline/` — client adapter plus a secret-free snapshot of live `/opt/maziyar-control-core` (`live/control_core.py`). Live MariaDB `SHOW TABLES` / systemd ActiveState still gated.
 - `skills/qalam/` — versioned writing registry (router, fa-IR overlays, Teznevise ZWNJ).
 - `skills/art-of-writing-bible/` — Bible 2.0.0 + history 1.0.0–1.3.0.
 - `skills/persian-medical-human-writing/` — medical overlay.

@@ -21,9 +21,12 @@ This is additive. It must not destroy existing control-core tables.
 ## Live source reconciliation (AAX-7, STOP before Apply)
 
 Captured 2026-09-19 from `control_core.py` on `server.maziyarid.com`
-(65370 bytes / 1096 lines). This is **source schema**, not a live
-`SHOW TABLES` dump. Live table presence still needs `ada-inspect`
-(not installed) or an approved schema-only MariaDB read.
+(65370 bytes / 1096 lines; snapshot
+`runtime/control-core-baseline/live/control_core.py`, captured-bytes
+sha256 `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`).
+This is **source schema**, not a live `SHOW TABLES` dump. Live table
+presence still needs `ada-inspect` (not installed) or an approved
+schema-only MariaDB read.
 
 Do **not** run the Apply section until this stop is complete.
 

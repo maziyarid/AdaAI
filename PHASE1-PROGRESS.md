@@ -1,5 +1,34 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T06:42Z — AAX-3 live source snapshot imported (AC2)
+
+**Fetched HEAD:** `cd7c63c0fb25ecdb7e1e9eebb4499797441bb6ff`.
+Implementation parent still Greptile **5/5**. PR #2 open, not merged.
+
+### Done this session
+- Ada-readonly `cat` of `/opt/maziyar-control-core/control_core.py`
+  (65370 bytes / 1096 lines). No env values. No `ada_*` / `pd_*`
+  names in source.
+- Imported snapshot to `runtime/control-core-baseline/live/` plus
+  unit file. SHA-256 of **captured bytes**:
+  `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`.
+  Host `sha256sum` still POLICY_DENIED.
+- Contract tests parse the snapshot: 20 tables, `INSERT IGNORE`
+  idempotency, `FOR UPDATE SKIP LOCKED` claim, six seeded schedules,
+  `/health` behind Bearer, env-only credentials.
+- `clickup_state_steward.py` remains mode-denied. `ada-inspect`
+  still not installed.
+
+### Not done
+- AC3 live `SHOW TABLES` (source absence of `ada_*` is not MariaDB
+  proof).
+- Production SQL. Merge. Deploy. Live Teznevise canary.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
+
 ## 2026-09-19T23:20Z — mazcontrol helper prepared; AAX-3 AC2/AC3 still gated
 
 **Fetched HEAD:** `7953eaba43bd0fe5230ae9f0b3f0370cf8a1d1ed` (unchanged).

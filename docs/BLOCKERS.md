@@ -1,12 +1,12 @@
 # Phase-1 blocker report
 
-Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Greptile independently reviewed `3513278` at 5/5 (no outstanding P0/P1). Secret-free AAX-3 host inventory captured 2026-09-18T22:15Z and reconfirmed 2026-09-19T23:20Z. AAX-4 `/health` 401 caller identified from live source (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS`). mazcontrol read-only helper is in-repo, not installed. Production SQL not applied. Live MariaDB dump and systemd ActiveState still gated.**
+Status: **engine + AAX-12 steward + AAX-15 failed-run outbox in-repo. Live `control_core.py` imported 2026-09-19T06:42Z (65370 bytes, sha256 of captured bytes `aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3`). Greptile independently reviewed `3513278` at 5/5 (no outstanding P0/P1). AAX-4 `/health` 401 caller identified from live source. mazcontrol read-only helper is in-repo, not installed. Production SQL not applied. Live MariaDB `SHOW TABLES` and systemd ActiveState still gated.**
 
 ## Blocker 1 — Ada-readonly SSH works; MariaDB / ActiveState still gated (updated 2026-09-18T22:15Z)
 
 **Resolved this session:** viewer profile `grok-ada-readonly` can `pwd`, `ls /opt`, and `cat` the control-core unit. `/opt/maziyar-control-core` exists on `server.maziyarid.com`. Inventory is in `docs/AAX3-LIVE-BASELINE.md`.
 
-**Still blocked:** `systemctl` ActiveState/SubState and `sha256sum` remain refused on this readOnly profile. `state/` and `tools/` remain mode-denied. No `mysqldump --no-data`. Live `ada_*` vs `pd_*` table list therefore remains open. Do not clear `readOnly` to get those commands. AAX-4 `/health` 401 caller is now identified from live `control_core.py` (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS` expects 401 as healthy); do not weaken auth.
+**Still blocked:** `systemctl` ActiveState/SubState and host `sha256sum` remain refused on this readOnly profile. `state/` and `tools/` remain mode-denied. `clickup_state_steward.py` is mode-denied. No `mysqldump --no-data`. Live `ada_*` vs `pd_*` **table list** therefore remains open (source has zero `ada_*` / `pd_worker_runs` / `pd_outbox` names; that is not `SHOW TABLES`). Do not clear `readOnly` to get those commands. AAX-4 `/health` 401 caller is identified from live `control_core.py` (`BLACKOUT_SENTINEL` / `HEALTH_TARGETS` expects 401 as healthy); do not weaken auth.
 
 **Do not use the Content/Royadarman host as Ada.** That host still lacks `/opt/maziyar-control-core`.
 
@@ -42,7 +42,7 @@ Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushe
 
 - Additive MariaDB `ada_*` SQL written, dialect-reviewed, not applied. Includes `005_ada_agiflow_projection.sql` and `006_ada_failed_run_outbox.sql`.
 - `path_hash` uniqueness and one-ACTIVE release constraint in SQL.
-- Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR.
+- Job/schedule/lease regression tests against documented PRESERVED_BEHAVIOR **and** the imported live source snapshot.
 - HMAC receipts carry `signature_alg` + `key_id`.
 - Fail-closed authorize / approvals / journal / ZWNJ / shadow mode.
 - AAX-12 in-repo Agiflow steward: mapping, HMAC-issued Review evidence, one-time human Done grant, human-edit conflict, outbox replay of ids only, no runtime writes, no ClickUp dependency. Caller-constructed evidence is rejected (`UNKNOWN_EVIDENCE`).
