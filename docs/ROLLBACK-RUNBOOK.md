@@ -28,8 +28,13 @@ Do not copy PostgreSQL WAL commands here.
 
 ## Restore drill (required before first production apply)
 
-1. Create a temporary schema.
-2. Restore the encrypted backup into it.
-3. `SELECT COUNT(*)` on live control-core job table and `ada_scope_versions` if present.
+See `docs/AAX7-BACKUP-CHECKPOINT.md` for the exact encrypted-dump,
+schema-only checkpoint, checksum, off-host copy, retention, and
+rollback-trigger commands. Production dump is not executed from the
+repository plan.
+
+1. Create a temporary schema (`ada_restore_drill_$TS`, never the live name).
+2. Restore the encrypted backup into it (`age -d` off-host).
+3. `SELECT COUNT(*)` on live control-core job table and `ada_scope_versions` if present. No row payloads.
 4. Drop the temporary schema.
-5. Record result in `ada_backup_runs` with `backup_kind='RESTORE_DRILL'`.
+5. Record result in `ada_backup_runs` with `backup_kind='RESTORE_DRILL'` only after Ada tables exist. Until then keep the JSON log next to the ciphertext.

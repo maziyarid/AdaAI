@@ -2,8 +2,10 @@
 """AAX-7 isolated MariaDB rehearsal. NEVER production.
 
 Requires a local unix socket of a disposable mariadbd started with
---skip-networking. Refuses TCP, remote hosts, default 3306, and missing
-sockets. Does not read production env files.
+--skip-networking, datadir under /tmp, and a disposable marker file
+whose first line is ADA-ISOLATED-REHEARSAL-DISPOSABLE. Refuses TCP,
+remote hosts, default 3306, long-lived datadirs, and missing markers.
+Does not read production env files.
 
 Usage (example, disposable instance only):
 
@@ -42,6 +44,7 @@ PROTECTED = (
     "audit_log",
 )
 DB = "ada_isolated_rehearsal"
+DISPOSABLE_TOKEN = "ADA-ISOLATED-REHEARSAL-DISPOSABLE"
 CREATE_RE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+`?([A-Za-z0-9_]+)`?", re.I)
 
 
@@ -61,6 +64,33 @@ def require_socket() -> Path:
         fail("socket must be under /tmp/ (disposable): " + raw)
     if not path.is_socket():
         fail("not a unix socket: " + raw)
+    return path
+
+
+def variable_value(raw: str) -> str:
+    line = raw.strip().splitlines()[0] if raw.strip() else ""
+    if "\t" in line:
+        return line.split("\t", 1)[1].strip()
+    parts = line.split()
+    return parts[-1] if parts else ""
+
+
+def require_tmp_path(name: str, value: str) -> str:
+    if not value.startswith("/tmp/") or ".." in value:
+        fail(f"refusing rehearsal: {name} is not under /tmp/: {value}")
+    return value
+
+
+def require_disposable_marker(sock: Path) -> Path:
+    raw = os.environ.get("ADA_REHEARSAL_MARKER", str(sock) + ".disposable")
+    path = Path(raw)
+    if not str(path).startswith("/tmp/"):
+        fail("disposable marker must be under /tmp/")
+    if not path.is_file():
+        fail("refusing rehearsal: missing disposable marker " + str(path))
+    token = path.read_text(encoding="utf-8").splitlines()[0].strip() if path.stat().st_size else ""
+    if token != DISPOSABLE_TOKEN:
+        fail("refusing rehearsal: disposable marker token mismatch")
     return path
 
 
@@ -194,10 +224,16 @@ def expect_error(client: str, sock: Path, db: str, sql: str, needle: str) -> str
 
 def main() -> int:
     sock = require_socket()
+    marker = require_disposable_marker(sock)
     client = client_bin()
     skip_net = run_sql(client, sock, "SHOW VARIABLES LIKE 'skip_networking';")
     if "ON" not in skip_net.upper() and "1" not in skip_net.split():
         fail("refusing rehearsal: skip_networking is not ON")
+    datadir = variable_value(run_sql(client, sock, "SHOW VARIABLES LIKE 'datadir';"))
+    require_tmp_path("datadir", datadir)
+    pid_file = variable_value(run_sql(client, sock, "SHOW VARIABLES LIKE 'pid_file';"))
+    if pid_file:
+        require_tmp_path("pid_file", pid_file)
     version = run_sql(client, sock, "SELECT VERSION();").strip()
     run_sql(client, sock, f"DROP DATABASE IF EXISTS `{DB}`; CREATE DATABASE `{DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
 
@@ -380,6 +416,8 @@ def main() -> int:
     report = {
         "production": False,
         "skip_networking": True,
+        "datadir": datadir,
+        "disposable_marker": str(marker),
         "mariadb_version": version,
         "database": DB,
         "socket": str(sock),

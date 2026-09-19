@@ -4,7 +4,10 @@ This is additive. It must not destroy existing control-core tables.
 
 ## Preconditions (stop if any fail)
 
-1. Encrypted MariaDB backup completed and checksummed.
+1. Encrypted MariaDB backup completed and checksummed (procedure:
+   `docs/AAX7-BACKUP-CHECKPOINT.md`; production dump is **not** done
+   from this branch).
+
 2. Off-host copy confirmed.
 3. Restore drill into a throwaway schema succeeded (see ROLLBACK-RUNBOOK.md).
 4. `maziyar-control-core.service` is healthy on 127.0.0.1:8770.

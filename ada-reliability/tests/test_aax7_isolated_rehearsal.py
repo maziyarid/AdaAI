@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 LIVE_SOURCE = ROOT / "runtime" / "control-core-baseline" / "live" / "control_core.py"
@@ -122,3 +125,35 @@ def test_006_does_not_claim_live_pd_tables_exist():
     assert "Confirm with ada-inspect tables" in sql
     assert "CREATE TABLE IF NOT EXISTS jobs" not in sql
     assert "CREATE TABLE IF NOT EXISTS pending_external_sync" not in sql
+
+
+def test_rehearsal_script_requires_disposable_instance_marker(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "ada-reliability" / "scripts"))
+    import isolated_mariadb_rehearsal as rehearsal
+
+    assert rehearsal.DISPOSABLE_TOKEN == "ADA-ISOLATED-REHEARSAL-DISPOSABLE"
+    assert rehearsal.variable_value("datadir\t/tmp/ada-rehearsal/data/\n") == "/tmp/ada-rehearsal/data/"
+    rehearsal.require_tmp_path("datadir", "/tmp/ada-rehearsal/data/")
+    with pytest.raises(SystemExit):
+        rehearsal.require_tmp_path("datadir", "/var/lib/mysql/")
+    with pytest.raises(SystemExit):
+        rehearsal.require_tmp_path("datadir", "/tmp/../var/lib/mysql/")
+
+    sock = Path("/tmp/ada-rehearsal.sock")
+    missing = Path("/tmp/ada-rehearsal.sock.disposable")
+    if missing.exists():
+        missing.unlink()
+    with pytest.raises(SystemExit):
+        rehearsal.require_disposable_marker(sock)
+
+    marker = tmp_path / "marker"
+    # tmp_path is not under /tmp in some environments; force /tmp file
+    real = Path("/tmp/ada-rehearsal-test.disposable")
+    real.write_text("WRONG\n", encoding="utf-8")
+    monkeypatch.setenv("ADA_REHEARSAL_MARKER", str(real))
+    with pytest.raises(SystemExit):
+        rehearsal.require_disposable_marker(sock)
+    real.write_text(rehearsal.DISPOSABLE_TOKEN + "\n", encoding="utf-8")
+    assert rehearsal.require_disposable_marker(sock) == real
+    real.unlink()
+    monkeypatch.delenv("ADA_REHEARSAL_MARKER", raising=False)

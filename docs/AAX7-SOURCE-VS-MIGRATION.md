@@ -115,7 +115,8 @@ only after live `pd_worker_runs` / `pd_outbox` presence is known.
 1. `ada-inspect tables` → live `ada_%` / `pd_%` names
 2. `ada-inspect create jobs` / `schedules` / `pending_external_sync`
 3. If present, `ada-inspect create pd_worker_runs` / `pd_outbox`
-4. Encrypted backup + restore drill
+4. Encrypted backup + restore drill (command plan:
+   `docs/AAX7-BACKUP-CHECKPOINT.md`; production dump **not** executed)
 5. Human approval
 
 Production SQL this session: **NONE**.

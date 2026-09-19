@@ -1,5 +1,45 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T09:40Z — backup/checkpoint contract + Mistral loopback canary (not executed)
+
+**Fetched HEAD:** `e529bc4c3cca9171675dafba8645724af4777a3a` (matches origin).
+Greptile independently reviewed that SHA at **4/5** (check
+`105874371957`, completed 09:25:04Z) with **P1**: isolated rehearsal
+could DROP `ada_isolated_rehearsal` on a long-lived MariaDB whose
+socket happened to be under `/tmp` with `skip_networking=ON`. Valid.
+Did not dismiss. Fix in this commit: require disposable marker token
+plus `datadir`/`pid_file` under `/tmp/` before any DROP/CREATE.
+
+### Live evidence this session
+- Ada-readonly reconfirm: `ls /usr/local/bin/ada-inspect` → ENOENT.
+  `readOnly` stayed on. Royadarman not used. `curl` `:9102` POLICY_DENIED.
+- Live Mistral worker source inspected (`cat` of
+  `/srv/community-mcp/mistral-worker/index.mjs`, 619 lines):
+  `GET /healthz` (v1.3.1), loopback-only `POST /internal/chat` (no job
+  enqueue, credential stays in worker), MCP tools include mutating
+  `mistral_local_create_job`. No WordPress route in that file.
+- AAX-7 AC1: production-safe encrypted backup / schema checkpoint /
+  checksum / restore-drill / retention / rollback-trigger command plan
+  (`docs/AAX7-BACKUP-CHECKPOINT.md` + dry-run
+  `scripts/backup_checkpoint_plan.py`). Production `mysqldump` not run.
+  Isolated apply/rollback already existed; encrypt+off-host still needs
+  mazcontrol.
+- AAX-8: fail-closed `MistralShadowCanary`. `live_mistral_job` stays
+  false without an executed loopback `/internal/chat`. No WP write.
+  No job enqueue. AC1/AC3/AC4 stay OPEN.
+- CI on `e529bc4`: pytest jobs `105874365831` / `105874359368`,
+  `runner_id=0`, ~2s, logs 404. Do not rewrite app code.
+- Local suite **222 passed**. Critical files unchanged
+  (engine 71704, outbox 40345).
+
+### Not claimed
+- Live `SHOW TABLES`. Production SQL. Merge of PR #2. Live Mistral POST.
+- Greptile 5/5 on `e529bc4` (it is 4/5 P1; fix is in this commit, not yet re-reviewed).
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T09:20Z — Greptile 5/5 on 797bc3f; isolated MariaDB rehearsal
 
 **Fetched HEAD:** `797bc3ff10417a7c7f696fdb0f42b9e144754719` (matches origin).

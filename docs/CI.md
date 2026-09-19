@@ -1,5 +1,31 @@
 # CI status
 
+## 2026-09-19T09:26Z — runner still unassigned on `e529bc4`
+
+`maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
+`e529bc4c3cca9171675dafba8645724af4777a3a`:
+
+- pull_request run `35434343998` job `105874365831` (~2s, `conclusion=failure`)
+- push run `35434341749` job `105874359368` (~2s, `conclusion=failure`)
+- Job JSON: `runner_id=0`, `runner_name=""`, `runner_group_id=0`
+- `get_job_logs` for job `105874365831`: **HTTP 404**
+- Greptile Review check `105874371957` on the same SHA: **in_progress**
+  (started 09:18:46Z). Parent `797bc3f` check `105872277622` was 5/5;
+  do not inherit.
+
+Workflow `ada-reliability.yml` is `state=active`, `runs-on:
+ubuntu-latest`. Repo Actions is enabled. Authenticated account
+`maziyarid` (user, not org). 0 self-hosted runners.
+
+Same pattern as every prior SHA: hosted runner never assigned, pytest
+never starts. Account/security or abuse hold, not a failing suite.
+
+Do not rewrite Ada application code for `runner_id=0`. Human check
+remains GitHub account Actions / billing / abuse.
+
+Local suite on this tree is the proof.
+
+
 ## 2026-09-19T09:10Z — runner still unassigned on `5d331d7`; account banner
 
 `maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
