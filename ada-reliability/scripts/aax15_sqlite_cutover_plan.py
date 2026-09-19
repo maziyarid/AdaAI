@@ -68,10 +68,13 @@ def mutation_kind(event_type: str, state: str) -> str:
     return "none"
 
 
-def map_outbox_row(row: dict) -> dict:
+def map_outbox_row(row: dict, job_bindings: dict[str, str] | None = None) -> dict:
     state = str(row["state"])
     stable_id = str(row["stable_id"])
     payload = parse_payload(row.get("payload_json"))
+    job_bindings = job_bindings or {}
+    payload_job_id = str(payload.get("durable_job_id") or "").strip()
+    durable_job_id = str(job_bindings.get(stable_id) or payload_job_id or "").strip() or None
     payload = {
         **payload,
         "_legacy_pd_outbox": {
@@ -90,7 +93,7 @@ def map_outbox_row(row: dict) -> dict:
         "run_id": str(row["run_id"]),
         "worker": str(row["worker"]),
         "schedule_id": row.get("schedule") or None,
-        "durable_job_id": None,
+        "durable_job_id": durable_job_id,
         "factory_task_id": row.get("factory_task_id") or None,
         "packet_id": row.get("packet_ref") or None,
         "artifact_id": row.get("artifact_ref") or None,
@@ -118,7 +121,7 @@ def map_outbox_row(row: dict) -> dict:
     }
 
 
-def build_plan(sqlite_path: Path) -> dict:
+def build_plan(sqlite_path: Path, job_bindings: dict[str, str] | None = None) -> dict:
     if not sqlite_path.is_file():
         raise CutoverError(f"SQLite source not found: {sqlite_path}")
     uri = "file:" + str(sqlite_path.resolve()) + "?mode=ro"
@@ -167,7 +170,20 @@ def build_plan(sqlite_path: Path) -> dict:
     if len(stable) != len(set(stable)) or len(idem) != len(set(idem)):
         raise CutoverError("pd_outbox uniqueness invariant violated")
 
-    mapped = [map_outbox_row(r) for r in outbox]
+    job_bindings = job_bindings or {}
+    unknown_bindings = sorted(set(job_bindings) - set(stable))
+    if unknown_bindings:
+        raise CutoverError(
+            "job binding supplied for unknown stable_id(s): " + ",".join(unknown_bindings)
+        )
+
+    mapped = [map_outbox_row(r, job_bindings) for r in outbox]
+    missing_job_bindings = sorted(
+        row["sync_marker"]
+        for row in mapped
+        if row["mutation_kind"] == "agiflow_sync" and not row["durable_job_id"]
+    )
+    cutover_ready = not missing_job_bindings
     return {
         "format": "aax15-cutover-plan-v1",
         "source": {
@@ -195,6 +211,7 @@ def build_plan(sqlite_path: Path) -> dict:
             "explicit_human_apply_approval_required": True,
             "encrypted_backup_and_off_host_key_required": True,
             "runtime_writer_switch_required_before_reenable": True,
+            "missing_durable_job_bindings": missing_job_bindings,
         },
         "target": {
             "migration": "006_ada_failed_run_outbox.sql",
@@ -202,7 +219,7 @@ def build_plan(sqlite_path: Path) -> dict:
             "rows": mapped,
             "row_digest": digest(mapped),
         },
-        "cutover_ready_for_approved_maintenance_window": True,
+        "cutover_ready_for_approved_maintenance_window": cutover_ready,
         "production_sql_applied": False,
         "runtime_switched": False,
     }
@@ -212,9 +229,25 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sqlite", required=True, type=Path)
     ap.add_argument("--output", type=Path)
+    ap.add_argument(
+        "--job-binding",
+        action="append",
+        default=[],
+        metavar="STABLE_ID=DURABLE_JOB_ID",
+        help="Explicit durable control-core job binding for replayable legacy Agiflow rows.",
+    )
     args = ap.parse_args()
+    bindings: dict[str, str] = {}
     try:
-        plan = build_plan(args.sqlite)
+        for raw in args.job_binding:
+            stable_id, sep, job_id = raw.partition("=")
+            stable_id, job_id = stable_id.strip(), job_id.strip()
+            if not sep or not stable_id or not job_id:
+                raise CutoverError("--job-binding must be STABLE_ID=DURABLE_JOB_ID")
+            if stable_id in bindings and bindings[stable_id] != job_id:
+                raise CutoverError("conflicting --job-binding for " + stable_id)
+            bindings[stable_id] = job_id
+        plan = build_plan(args.sqlite, bindings)
     except (CutoverError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2

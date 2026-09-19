@@ -37,4 +37,4 @@ The cutover sequence is: quiesce every SQLite producer/claimer; run the read-onl
 
 `pd_worker_runs` remains historical run evidence after cutover and must not become a second replay authority. Successful-run history does not need to be copied into `ada_failed_runs`, whose scope is failed/pending execution recovery.
 
-Current live planning snapshot on 2026-09-19: 10 `succeeded`, 1 `parked`, zero observed `retryable`/`inflight` rows. This is favourable for planning but is not an Apply grant; it must be rechecked immediately before an approved cutover.
+Current live planning snapshot on 2026-09-19: 10 `succeeded`, 1 `parked`, zero observed `retryable`/`inflight` rows. This is favourable for planning but is not an Apply grant; it must be rechecked immediately before an approved cutover. The parked `agiflow_sync` row must also have a real durable control-core job binding before cutover can be ready. The current live row `pdobx_drbevidence_task23_20260918` has no such binding in its SQLite payload, so the current snapshot is intentionally reported NOT ready until an operator supplies a verified mapping or resolves/retires that legacy recovery item.

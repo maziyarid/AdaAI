@@ -65,7 +65,7 @@ def test_quiescent_plan_preserves_idempotency_and_parked_semantics(tmp_path):
     db = make_db(tmp_path / "factory.sqlite3")
     before = db.read_bytes()
     plan = cutover.build_plan(db)
-    assert plan["cutover_ready_for_approved_maintenance_window"] is True
+    assert plan["cutover_ready_for_approved_maintenance_window"] is False
     assert plan["decision"]["dual_write_allowed"] is False
     assert plan["preconditions"]["active_replay_rows"] == 0
     assert plan["preconditions"]["parked_rows"] == 1
@@ -73,6 +73,8 @@ def test_quiescent_plan_preserves_idempotency_and_parked_semantics(tmp_path):
     assert [r["idempotency_key"] for r in rows] == ["idem-1", "idem-2"]
     parked = next(r for r in rows if r["lifecycle"] == "parked")
     assert parked["mutation_kind"] == "agiflow_sync"
+    assert parked["durable_job_id"] is None
+    assert plan["preconditions"]["missing_durable_job_bindings"] == ["stable-2"]
     assert parked["lease_owner"] is None
     assert parked["claim_generation"] == 0
     assert db.read_bytes() == before
@@ -95,3 +97,38 @@ def test_plan_is_deterministic(tmp_path):
     assert a["source"]["outbox_digest"] == b["source"]["outbox_digest"]
     assert a["target"]["row_digest"] == b["target"]["row_digest"]
     assert [r["id"] for r in a["target"]["rows"]] == [r["id"] for r in b["target"]["rows"]]
+
+
+def test_explicit_durable_job_binding_makes_replayable_snapshot_ready(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    plan = cutover.build_plan(db, {"stable-2": "control-core-job-42"})
+    assert plan["cutover_ready_for_approved_maintenance_window"] is True
+    assert plan["preconditions"]["missing_durable_job_bindings"] == []
+    parked = next(r for r in plan["target"]["rows"] if r["lifecycle"] == "parked")
+    assert parked["mutation_kind"] == "agiflow_sync"
+    assert parked["durable_job_id"] == "control-core-job-42"
+
+
+def test_payload_durable_job_binding_is_preserved(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    c = sqlite3.connect(db)
+    c.execute(
+        "UPDATE pd_outbox SET payload_json=? WHERE stable_id='stable-2'",
+        ('{"content":"x","durable_job_id":"job-from-payload"}',),
+    )
+    c.commit()
+    c.close()
+    plan = cutover.build_plan(db)
+    assert plan["cutover_ready_for_approved_maintenance_window"] is True
+    parked = next(r for r in plan["target"]["rows"] if r["lifecycle"] == "parked")
+    assert parked["durable_job_id"] == "job-from-payload"
+
+
+def test_unknown_job_binding_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(db, {"does-not-exist": "job-1"})
+    except cutover.CutoverError as exc:
+        assert "unknown stable_id" in str(exc)
+    else:
+        raise AssertionError("unknown binding must be refused")

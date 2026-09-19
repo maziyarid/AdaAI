@@ -4,7 +4,7 @@
 - AAX-7 exact-head independent review completed 5/5 with no blocking findings; AAX-7 moved to Review with all ACs checked. This is not production Apply permission.
 - Live SQLite AAX-15 authority re-read: 10 `succeeded`, 1 `parked`, zero observed `retryable`/`inflight`; `pd_worker_runs` has 38 historical run rows.
 - Decision: future recovery authority is MariaDB `ada_failed_runs`; SQLite `pd_outbox` remains current authority until an approved quiescent single-writer cutover. No dual-write/dual-claim period.
-- Added read-only deterministic planner `ada-reliability/scripts/aax15_sqlite_cutover_plan.py`; live planning run produced 11 mapped rows and refused no safety preconditions.
+- Added read-only deterministic planner `ada-reliability/scripts/aax15_sqlite_cutover_plan.py`. Exact-head review found that replayable Agiflow rows also require a durable control-core job binding. The planner now fails cutover readiness when that binding is absent; the live snapshot is currently NOT ready because `pdobx_drbevidence_task23_20260918` has no durable job ID.
 - `pd_worker_runs` remains read-only historical evidence after cutover; it is not a replay authority.
 - Migration 006 remains HOLD. Production SQL/mutation: NONE.
 
