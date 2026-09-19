@@ -29,6 +29,23 @@ LIVE_SEEDED_SCHEDULES = (
 )
 KNOWN_SCHEDULE_IDS = frozenset(row[0] for row in LIVE_SEEDED_SCHEDULES)
 
+# From live snapshot handle_job(). Identity metadata, not a job queue.
+LIVE_JOB_TYPES = frozenset(
+    {
+        "test.echo",
+        "agent.tick",
+        "blackout_sentinel.run",
+        "seo_scout.run",
+        "project_controller.run",
+        "clickup_state_steward.run",
+        "oracle_forecaster.run",
+        "temp_tool_harvester.run",
+        "mistral.chat",
+        "test.fail",
+    }
+)
+LIVE_JOB_SHAPE_KEYS = ("id", "stable_id", "agent", "job_type", "status")
+
 # Adapter may only read. A write/lease/SQL method appearing here is a contract break.
 FORBIDDEN_ADAPTER_ATTRS = (
     "create_schedule",
@@ -78,6 +95,29 @@ def live_schedule_binding(stable_id: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def live_job_context(job: Any) -> Optional[dict[str, Any]]:
+    """Secret-free job identity from a read. Never copies payload_json."""
+    if not isinstance(job, dict):
+        return None
+    for key in LIVE_JOB_SHAPE_KEYS:
+        if not job.get(key):
+            return None
+    job_type = str(job["job_type"])
+    if job_type not in LIVE_JOB_TYPES:
+        return None
+    return {
+        "id": str(job["id"]),
+        "stable_id": str(job["stable_id"]),
+        "agent": str(job["agent"]),
+        "job_type": job_type,
+        "status": str(job["status"]),
+        "source": "adapter.get_job",
+        "live_mistral_job": False,
+        "mistral_participated": False,
+        "payload_copied": False,
+    }
+
+
 class ShadowPipeline:
     """bootstrap → inspect → propose → validate → authorize → record → STOP.
 
@@ -117,6 +157,7 @@ class ShadowPipeline:
         proposal: dict[str, Any],
         risk_class: str = "low",
         live_schedule_stable_id: Optional[str] = None,
+        live_job_id: Optional[str] = None,
     ) -> dict[str, Any]:
         context = {
             "agent_id": agent_id,
@@ -129,7 +170,84 @@ class ShadowPipeline:
                 if live_schedule_stable_id is not None
                 else None
             ),
+            "live_job_id": live_job_id,
+            "live_job_context": None,
+            "evidence_kind": "repository_shadow",
+            "live_mistral_job": False,
+            "mistral_participated": False,
         }
+        if live_job_id is not None:
+            if self.adapter is None or not hasattr(self.adapter, "get_job"):
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "missing_read_adapter",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["missing_read_adapter"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
+            try:
+                job = self.adapter.get_job(live_job_id)
+            except Exception:
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "adapter_job_read_failed",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["adapter_job_read_failed"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
+            bound = live_job_context(job)
+            if bound is None:
+                return self._seal(
+                    {
+                        "pipeline": "AAX-8",
+                        "stage": "EVALUATE",
+                        "mode": "SHADOW",
+                        "mutated": False,
+                        "production_sql": False,
+                        "production_mutation": False,
+                        **context,
+                        "authorization": {
+                            "decision": "DENY",
+                            "reason": "invalid_live_job_shape",
+                        },
+                        "qalam_ok": False,
+                        "zwnj_fail": False,
+                        "adaeval": {
+                            "validation_failures": ["invalid_live_job_shape"],
+                            "target_correctness": False,
+                        },
+                    }
+                )
+            context["live_job_context"] = bound
+            context["evidence_kind"] = "adapter_job_read"
         if (
             live_schedule_stable_id is not None
             and live_schedule_stable_id not in KNOWN_SCHEDULE_IDS
@@ -275,6 +393,10 @@ class ShadowPipeline:
                 "site_id": site_id,
                 "live_schedule_stable_id": trace.get("live_schedule_stable_id"),
                 "live_schedule_binding": trace.get("live_schedule_binding"),
+                "live_job_context": trace.get("live_job_context"),
+                "evidence_kind": trace.get("evidence_kind") or "repository_shadow",
+                "live_mistral_job": False,
+                "mistral_participated": False,
                 "expected_postcondition": expected,
                 "observed": observed,
                 "postcondition_proven": proven,
@@ -341,6 +463,10 @@ class ShadowPipeline:
                 "parent_evidence_hmac": parent_hmac,
                 "task_id": proof.get("task_id"),
                 "site_id": proof.get("site_id"),
+                "live_job_context": proof.get("live_job_context"),
+                "evidence_kind": proof.get("evidence_kind") or "repository_shadow",
+                "live_mistral_job": False,
+                "mistral_participated": False,
                 "authorization": {
                     "decision": "DENY",
                     "reason": "shadow_forbids_production_rollback",

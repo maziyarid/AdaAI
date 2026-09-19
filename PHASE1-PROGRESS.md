@@ -1,5 +1,34 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T08:25Z — AAX-8 read-only live job shape (not AC1)
+
+**Fetched HEAD:** `ae4fd13af8b137e3f39bdc0cb19cac583960762a`.
+Greptile independently reviewed that SHA at **5/5** (check completed
+08:15:09Z). Prior HMAC P1 remains closed. No new P0/P1. PR #2 open,
+not merged, `mergeable_state=unstable`.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/usr/local/bin/ada-inspect` still ENOENT. `readOnly` stayed on.
+  Royadarman not used. AAX-3 AC3 still open. Close AC3 only from live
+  `SHOW TABLES`.
+- AAX-8: optional `live_job_id` binds secret-free job identity via
+  read-only `adapter.get_job`. Missing adapter / read failure /
+  unknown `job_type` fail closed. `payload_json` is never copied.
+  Evidence is labelled `evidence_kind=adapter_job_read` and
+  `live_mistral_job=false` / `mistral_participated=false` even when
+  the bound type is `mistral.chat`. HMAC covers the new fields.
+  Local suite **187 passed**.
+- This is still repository/adapter-read proof. Do **not** check AAX-8
+  AC1/AC3/AC4.
+- Hosted Actions on `ae4fd13` still fail in ~2s (`runner_id=0`, job
+  `105866075903`). Do not rewrite app code for this.
+- SQL not applied. AAX-12/AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T08:15Z — AAX-8 independent postcondition/rollback evidence (in-repo)
 
 **Fetched HEAD:** `58e64c788bbea747251a82c4d5a8c68bd15a7cda`.

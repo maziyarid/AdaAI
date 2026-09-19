@@ -14,10 +14,12 @@ from ada_reliability.engine import AdaEngine, AdaError, IDENTITIES, ZWNJ, seed_p
 from ada_reliability.shadow_pipeline import (
     FORBIDDEN_ADAPTER_ATTRS,
     KNOWN_SCHEDULE_IDS,
+    LIVE_JOB_TYPES,
     LIVE_SEEDED_SCHEDULES,
     LIVE_SOURCE,
     ShadowPipeline,
     assert_adapter_is_read_only,
+    live_job_context,
     unsigned_evidence,
 )
 
@@ -322,6 +324,40 @@ def test_tampered_evaluation_verdict_fails_verify():
     assert pipe.verify_evidence(sealed)
 
 
+def test_tampered_live_job_context_fails_verify():
+    """HMAC must bind job-shape fields; flipping them must not still verify."""
+    e = fresh()
+    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    sealed = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="job-1",
+    )
+    assert pipe.verify_evidence(sealed)
+
+    ctx = deepcopy(sealed)
+    ctx["live_job_context"] = dict(ctx["live_job_context"])
+    ctx["live_job_context"]["live_mistral_job"] = True
+    assert pipe.verify_evidence(ctx) is False
+
+    kind = deepcopy(sealed)
+    kind["evidence_kind"] = "live_mistral_canary"
+    assert pipe.verify_evidence(kind) is False
+
+    flag = deepcopy(sealed)
+    flag["live_mistral_job"] = True
+    assert pipe.verify_evidence(flag) is False
+
+    participated = deepcopy(sealed)
+    participated["mistral_participated"] = True
+    assert pipe.verify_evidence(participated) is False
+    assert pipe.verify_evidence(sealed)
+
+
 def test_live_schedule_binding_is_snapshot_identity_not_mistral_job():
     e = fresh()
     pipe = ShadowPipeline(e)
@@ -495,3 +531,168 @@ def test_unknown_schedule_postcondition_is_not_proven():
     assert proof["task_completed"] is False
     assert "missing_postcondition_target" in proof["adaeval"]["validation_failures"]
     assert pipe.verify_evidence(proof)
+
+
+class _ReadAdapter:
+    """Read-only job source. Must not look like a scheduler."""
+
+    def __init__(self, jobs: dict):
+        self.jobs = jobs
+        self.reads = 0
+
+    def get_job(self, job_id: str):
+        self.reads += 1
+        if job_id not in self.jobs:
+            raise KeyError(job_id)
+        return self.jobs[job_id]
+
+    def health(self):
+        return {"ok": True, "http_status": 401, "contract": "protected-health"}
+
+
+MISTRAL_JOB = {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "stable_id": "job:mistral-chat:shape",
+    "agent": "MISTRAL_WORKER",
+    "job_type": "mistral.chat",
+    "status": "queued",
+    "payload_json": {"prompt": "SECRET_SHOULD_NOT_BE_COPIED", "api_key": "do-not-copy"},
+}
+
+
+def test_live_job_types_are_bound_from_snapshot_including_mistral_chat():
+    src = LIVE_SOURCE.read_text(encoding="utf-8")
+    for job_type in LIVE_JOB_TYPES:
+        assert job_type in src
+    assert "mistral.chat" in LIVE_JOB_TYPES
+    assert "CREATE TABLE IF NOT EXISTS jobs" in src
+
+
+def test_adapter_job_read_binds_shape_without_payload_or_live_mistral_claim():
+    e = fresh()
+    writes = e.wp.writes
+    adapter = _ReadAdapter({"job-1": MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+        live_job_id="job-1",
+    )
+    assert adapter.reads == 1
+    assert trace["evidence_kind"] == "adapter_job_read"
+    assert trace["live_mistral_job"] is False
+    assert trace["mistral_participated"] is False
+    ctx = trace["live_job_context"]
+    assert ctx["job_type"] == "mistral.chat"
+    assert ctx["payload_copied"] is False
+    assert "payload_json" not in ctx
+    assert "SECRET_SHOULD_NOT_BE_COPIED" not in str(ctx)
+    assert "SECRET_SHOULD_NOT_BE_COPIED" not in str(trace)
+    assert e.wp.writes == writes
+    assert trace["mutated"] is False
+    assert pipe.verify_evidence(trace)
+    proof = pipe.prove_postcondition(trace)
+    assert proof["live_mistral_job"] is False
+    assert proof["mistral_participated"] is False
+    assert e.wp.writes == writes
+
+
+def test_live_job_id_without_adapter_is_denied():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="job-1",
+    )
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "missing_read_adapter"
+    assert trace["live_mistral_job"] is False
+    assert set(e.tasks) == set()  # engine never called
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_invalid_job_shape_and_unknown_job_type_are_denied():
+    e = fresh()
+    adapter = _ReadAdapter(
+        {
+            "bad": {"id": "x"},
+            "unknown-type": {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "stable_id": "job:invented",
+                "agent": "FAKE",
+                "job_type": "invented.second.scheduler",
+                "status": "queued",
+            },
+        }
+    )
+    pipe = ShadowPipeline(e, adapter=adapter)
+    bad = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="bad",
+    )
+    assert bad["authorization"]["reason"] == "invalid_live_job_shape"
+    unknown = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="unknown-type",
+    )
+    assert unknown["authorization"]["reason"] == "invalid_live_job_shape"
+    assert live_job_context(adapter.jobs["unknown-type"]) is None
+    assert e.wp.writes == 0
+
+
+def test_adapter_job_read_failed_is_denied():
+    e = fresh()
+    writes = e.wp.writes
+    adapter = _ReadAdapter({})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id="missing",
+    )
+    assert adapter.reads == 1
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "adapter_job_read_failed"
+    assert trace["live_mistral_job"] is False
+    assert trace["mistral_participated"] is False
+    assert set(e.tasks) == set()
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_repository_shadow_never_claims_live_mistral():
+    e = fresh()
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert trace["evidence_kind"] == "repository_shadow"
+    assert trace["live_mistral_job"] is False
+    assert trace["mistral_participated"] is False
+    assert trace["live_job_context"] is None
