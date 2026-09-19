@@ -22,6 +22,7 @@ from ada_reliability.shadow_pipeline import (
     adapter_targets_live_control_core,
     assert_adapter_is_read_only,
     live_job_context,
+    live_job_id_is_safe,
     unsigned_evidence,
 )
 
@@ -1002,4 +1003,272 @@ def test_hmac_does_not_verify_after_swapping_live_job_identity():
     swapped_id["live_job_id"] = other["id"]
     assert pipe.verify_evidence(swapped_id) is False
     assert pipe.verify_evidence(a)
+
+
+class _EmptyUrlAlias(ControlCoreAdapter):
+    """Subclass with empty URL. Class-name equality must not un-mark this live."""
+
+    def __init__(self):
+        self.config = ControlCoreConfig(base_url="")
+        self.reads = 0
+
+    def get_job(self, job_id: str):
+        self.reads += 1
+        raise AssertionError("live subclass get_job must not run")
+
+
+class _WrapLive:
+    def __init__(self, inner):
+        self.inner = inner
+        self.reads = 0
+
+    def get_job(self, job_id: str):
+        self.reads += 1
+        return self.inner.get_job(job_id)
+
+
+def test_control_core_subclass_without_url_is_still_live():
+    alias = _EmptyUrlAlias()
+    assert adapter_targets_live_control_core(alias) is True
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e, adapter=alias)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_job_id=MISTRAL_JOB["id"],
+    )
+    assert alias.reads == 0
+    assert trace["authorization"]["decision"] == "DENY"
+    assert trace["authorization"]["reason"] == "live_adapter_read_not_authorised"
+    assert set(e.tasks) == set()
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_wrapped_control_core_adapter_is_denied_without_http():
+    inner = ControlCoreAdapter(
+        ControlCoreConfig(
+            base_url="http://ada-control-core.internal:8770",
+            api_token="SECRET_SHOULD_NOT_LEAVE",
+        )
+    )
+    wrap = _WrapLive(inner)
+    assert adapter_targets_live_control_core(wrap) is True
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e, adapter=wrap)
+    with patch("adapter.urlopen", side_effect=AssertionError("live HTTP forbidden")):
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id=MISTRAL_JOB["id"],
+        )
+    assert wrap.reads == 0
+    assert trace["authorization"]["reason"] == "live_adapter_read_not_authorised"
+    assert "SECRET_SHOULD_NOT_LEAVE" not in str(trace)
+    assert e.wp.writes == writes
+    assert pipe.verify_evidence(trace)
+
+
+def test_bound_get_job_method_on_foreign_object_is_live():
+    inner = ControlCoreAdapter(ControlCoreConfig(base_url="http://127.0.0.1:8770"))
+
+    class Holder:
+        pass
+
+    holder = Holder()
+    holder.get_job = inner.get_job
+    assert adapter_targets_live_control_core(holder) is True
+
+
+def test_unsafe_and_malformed_live_job_ids_never_reach_adapter():
+    e = fresh()
+    writes = e.wp.writes
+    adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter)
+    unsafe = (
+        "../jobs/" + MISTRAL_JOB["id"],
+        "/jobs/" + MISTRAL_JOB["id"],
+        "http://127.0.0.1:8770/jobs/" + MISTRAL_JOB["id"],
+        MISTRAL_JOB["id"] + "?x=1",
+        MISTRAL_JOB["id"] + "\n",
+        "job/../../../etc/passwd",
+    )
+    for bad in unsafe:
+        assert live_job_id_is_safe(bad) is False
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id=bad,
+        )
+        assert adapter.reads == 0
+        assert trace["authorization"]["decision"] == "DENY"
+        assert trace["authorization"]["reason"] == "unsafe_live_job_id"
+        assert set(e.tasks) == set()
+        assert e.wp.writes == writes
+        assert pipe.verify_evidence(trace)
+    for malformed in (0, 1, {"id": MISTRAL_JOB["id"]}, [MISTRAL_JOB["id"]]):
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal=PROPOSAL,
+            live_job_id=malformed,
+        )
+        assert adapter.reads == 0
+        assert trace["authorization"]["reason"] == "malformed_live_job_id"
+        assert e.wp.writes == writes
+        assert pipe.verify_evidence(trace)
+    assert live_job_id_is_safe(MISTRAL_JOB["id"]) is True
+    assert live_job_id_is_safe(MISTRAL_JOB["stable_id"]) is True
+
+
+def test_stale_job_status_does_not_grant_mutation():
+    for status in ("succeeded", "dead", "cancelled", "running", "queued"):
+        job = dict(MISTRAL_JOB)
+        job["status"] = status
+        e = fresh()
+        writes = e.wp.writes
+        apply_before = getattr(e, "_apply_calls", 0)
+        journals = set(e.journal)
+        adapter = _ReadAdapter({job["id"]: job})
+        pipe = ShadowPipeline(e, adapter=adapter)
+        trace = pipe.evaluate(
+            agent_id="mistral-canary",
+            task_type="academic_content",
+            project_id="teznevise",
+            site_id="teznevise.ir",
+            proposal={
+                "tool": "wp_publish",
+                "mutation_type": "PUBLISH",
+                "payload": {"resource_id": "42", "meta": {"title": "nope"}},
+                "confidence": 0.99,
+            },
+            live_job_id=job["id"],
+        )
+        assert trace["live_job_context"]["status"] == status
+        assert trace["authorization"]["decision"] != "ALLOW"
+        assert trace["mutated"] is False
+        assert trace["production_mutation"] is False
+        assert e.wp.writes == writes
+        assert getattr(e, "_apply_calls", 0) == apply_before
+        assert set(e.journal) == journals
+        assert e.tasks[trace["task_id"]]["state"] == "SHADOW"
+        rb = pipe.rollback(pipe.prove_postcondition(trace))
+        assert rb["rollback"]["executed"] is False
+        assert e.wp.writes == writes
+
+
+def test_shadow_combinations_cannot_escalate_to_mutation():
+    """live_job_id + approval + matching postcondition + live-read flag
+    still cannot journal or apply a production write.
+    """
+    matching = {
+        "tool": "wp_publish",
+        "mutation_type": "PUBLISH",
+        "payload": {
+            "resource_id": "42",
+            "meta": {"yoast_title": "خدمات نگارش"},
+        },
+        "confidence": 1.0,
+        "approval_ticket_id": "forged-approval",
+        "expected_postcondition": {"http_status": 200},
+    }
+    e = fresh()
+    writes = e.wp.writes
+    apply_before = getattr(e, "_apply_calls", 0)
+    journals = set(e.journal)
+    adapter = _ReadAdapter({MISTRAL_JOB["id"]: MISTRAL_JOB})
+    pipe = ShadowPipeline(e, adapter=adapter, allow_live_job_read=True)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=matching,
+        risk_class="critical",
+        live_schedule_stable_id="schedule:seo-scout",
+        live_job_id=MISTRAL_JOB["id"],
+    )
+    assert adapter.reads == 1
+    assert trace["authorization"]["decision"] != "ALLOW"
+    assert trace["mutated"] is False
+    assert trace["production_mutation"] is False
+    assert trace["production_sql"] is False
+    assert trace["live_mistral_job"] is False
+    assert set(e.journal) == journals
+    assert e.wp.writes == writes
+    assert getattr(e, "_apply_calls", 0) == apply_before
+    proof = pipe.prove_postcondition(trace)
+    assert proof["task_completed"] is False
+    assert proof["rollback"]["executed"] is False
+    rb = pipe.rollback(proof)
+    assert rb["rollback"]["executed"] is False
+    assert set(e.journal) == journals
+    assert e.wp.writes == writes
+    live = e.wp.read("teznevise.ir", "42")
+    assert live.meta["yoast_title"] == "خدمات نگارش"
+
+
+def test_shadow_allow_does_not_journal_a_reusable_write_grant():
+    e = fresh()
+    writes = e.wp.writes
+    journals = set(e.journal)
+    pipe = ShadowPipeline(e)
+    trace = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert trace["authorization"]["decision"] == "ALLOW"
+    assert set(e.journal) == journals
+    proof = pipe.prove_postcondition(trace)
+    assert proof["task_completed"] is False
+    rb = pipe.rollback(proof)
+    assert rb["rollback"]["executed"] is False
+    assert set(e.journal) == journals
+    assert e.wp.writes == writes
+    assert "journal_id" not in trace
+    with pytest.raises((AdaError, KeyError)):
+        e.apply_authorized_mutation(journal_id="shadow-forged")
+    assert e.wp.writes == writes
+
+
+def test_sealed_mutated_claim_cannot_prove_postcondition():
+    e = fresh()
+    writes = e.wp.writes
+    pipe = ShadowPipeline(e)
+    forged = pipe._seal(
+        {
+            "pipeline": "AAX-8",
+            "stage": "EVALUATE",
+            "mode": "SHADOW",
+            "mutated": True,
+            "production_mutation": False,
+            "production_sql": False,
+            "proposal": PROPOSAL,
+            "site_id": "teznevise.ir",
+            "expected_postcondition": {"http_status": 200},
+        }
+    )
+    assert pipe.verify_evidence(forged)
+    with pytest.raises(AdaError) as ei:
+        pipe.prove_postcondition(forged)
+    assert ei.value.code == "SHADOW_MUTATED"
+    assert e.wp.writes == writes
+    assert set(e.tasks) == set()
 

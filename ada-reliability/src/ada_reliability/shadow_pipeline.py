@@ -6,6 +6,7 @@ never creates a second scheduler or lease authority.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -64,9 +65,23 @@ FORBIDDEN_ADAPTER_ATTRS = (
 )
 
 # Repository shadow must not GET a networked control-core unless a canary
-# is authorised. The live-read gate treats any configured base_url as live;
-# it does not rely on a 127.0.0.1/localhost denylist that hostname aliases
-# can bypass.
+# is authorised. The live-read gate treats any configured base_url as live
+# and walks ControlCoreAdapter subclasses/wrappers. It does not rely on a
+# 127.0.0.1/localhost denylist that hostname aliases can bypass.
+_LIVE_ADAPTER_CLASS_NAMES = frozenset({"ControlCoreAdapter"})
+_WRAPPER_ATTRS = (
+    "inner",
+    "adapter",
+    "_adapter",
+    "client",
+    "wrapped",
+    "_inner",
+    "delegate",
+    "target",
+    "upstream",
+)
+# UUIDs and snapshot stable_ids (job:mistral-chat:shape). No path/URL chars.
+_SAFE_LIVE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$")
 
 
 def assert_adapter_is_read_only(adapter: Any) -> None:
@@ -75,23 +90,66 @@ def assert_adapter_is_read_only(adapter: Any) -> None:
             raise AdaError("SHADOW_ADAPTER_WRITES", name)
 
 
+def live_job_id_is_safe(value: str) -> bool:
+    """True for snapshot/UUID job ids. False for path, URL, or traversal ids."""
+    if not isinstance(value, str) or ".." in value:
+        return False
+    return bool(_SAFE_LIVE_JOB_ID.fullmatch(value))
+
+
+def _type_names(obj: Any) -> set[str]:
+    names: set[str] = set()
+    for cls in type(obj).__mro__:
+        n = getattr(cls, "__name__", "")
+        if n:
+            names.add(n)
+    return names
+
+
+def _configured_base_url(obj: Any) -> str:
+    cfg = getattr(obj, "config", None)
+    return str(getattr(cfg, "base_url", "") or "").strip()
+
+
 def adapter_targets_live_control_core(adapter: Any) -> bool:
     """True when get_job would perform a networked control-core read.
 
     Fail closed: any configured ``base_url`` is a live/network target.
-    Hostname aliases of loopback (or any other host) must not bypass the
-    gate. Literal ``127.0.0.1:8770`` / ``localhost:8770`` matches are
-    included, but they are not sufficient by themselves. Test doubles
-    have no ``config.base_url``.
+    ``ControlCoreAdapter`` (including subclasses and thin wrappers) is
+    live even with an empty URL. Hostname aliases of loopback must not
+    bypass the gate. Test doubles have no ``config.base_url`` and are
+    not ControlCoreAdapter types.
     """
-    cfg = getattr(adapter, "config", None)
-    base = str(getattr(cfg, "base_url", "") or "").strip()
-    if base:
-        return True
-    cls = type(adapter)
-    if getattr(cls, "__name__", "") == "ControlCoreAdapter":
-        return True
-    return False
+    seen: set[int] = set()
+
+    def walk(obj: Any, depth: int) -> bool:
+        if obj is None or depth > 4:
+            return False
+        oid = id(obj)
+        if oid in seen:
+            return False
+        seen.add(oid)
+        if _configured_base_url(obj):
+            return True
+        if _LIVE_ADAPTER_CLASS_NAMES & _type_names(obj):
+            return True
+        gj = getattr(obj, "get_job", None)
+        owner = getattr(gj, "__self__", None)
+        if owner is not None and owner is not obj:
+            if walk(owner, depth + 1):
+                return True
+        for name in _WRAPPER_ATTRS:
+            if not hasattr(obj, name):
+                continue
+            try:
+                inner = getattr(obj, name)
+            except Exception:
+                continue
+            if walk(inner, depth + 1):
+                return True
+        return False
+
+    return walk(adapter, 0)
 
 
 def unsigned_evidence(record: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +230,26 @@ class ShadowPipeline:
         self.evidence.append(record)
         return record
 
+    def _deny(self, context: dict[str, Any], reason: str) -> dict[str, Any]:
+        return self._seal(
+            {
+                "pipeline": "AAX-8",
+                "stage": "EVALUATE",
+                "mode": "SHADOW",
+                "mutated": False,
+                "production_sql": False,
+                "production_mutation": False,
+                **context,
+                "authorization": {"decision": "DENY", "reason": reason},
+                "qalam_ok": False,
+                "zwnj_fail": False,
+                "adaeval": {
+                    "validation_failures": [reason],
+                    "target_correctness": False,
+                },
+            }
+        )
+
     def verify_evidence(self, record: dict[str, Any]) -> bool:
         sig = record.get("evidence_hmac")
         if not sig or not isinstance(sig, str):
@@ -208,147 +286,32 @@ class ShadowPipeline:
             "mistral_participated": False,
         }
         if live_job_id is not None:
-            requested = str(live_job_id).strip()
-            if not requested:
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "empty_live_job_id",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["empty_live_job_id"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+            if not isinstance(live_job_id, str):
+                return self._deny(context, "malformed_live_job_id")
+            if not live_job_id.strip():
+                return self._deny(context, "empty_live_job_id")
+            if live_job_id != live_job_id.strip() or not live_job_id_is_safe(live_job_id):
+                # Path/URL/traversal/padded ids never reach GET /jobs/{id}.
+                return self._deny(context, "unsafe_live_job_id")
+            requested = live_job_id
             if self.adapter is None or not hasattr(self.adapter, "get_job"):
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "missing_read_adapter",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["missing_read_adapter"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+                return self._deny(context, "missing_read_adapter")
             if (
                 not self.allow_live_job_read
                 and adapter_targets_live_control_core(self.adapter)
             ):
                 # Fail closed before GET /jobs/{id}. Repository tests use fakes.
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "live_adapter_read_not_authorised",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["live_adapter_read_not_authorised"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+                return self._deny(context, "live_adapter_read_not_authorised")
             try:
-                job = self.adapter.get_job(live_job_id)
+                job = self.adapter.get_job(requested)
             except Exception:
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "adapter_job_read_failed",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["adapter_job_read_failed"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+                return self._deny(context, "adapter_job_read_failed")
             bound = live_job_context(job)
             if bound is None:
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "invalid_live_job_shape",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["invalid_live_job_shape"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+                return self._deny(context, "invalid_live_job_shape")
             if requested not in {bound["id"], bound["stable_id"]}:
                 # Adapter returned a different job than asked for.
-                return self._seal(
-                    {
-                        "pipeline": "AAX-8",
-                        "stage": "EVALUATE",
-                        "mode": "SHADOW",
-                        "mutated": False,
-                        "production_sql": False,
-                        "production_mutation": False,
-                        **context,
-                        "authorization": {
-                            "decision": "DENY",
-                            "reason": "live_job_id_mismatch",
-                        },
-                        "qalam_ok": False,
-                        "zwnj_fail": False,
-                        "adaeval": {
-                            "validation_failures": ["live_job_id_mismatch"],
-                            "target_correctness": False,
-                        },
-                    }
-                )
+                return self._deny(context, "live_job_id_mismatch")
             context["live_job_context"] = bound
             context["evidence_kind"] = "adapter_job_read"
         if (
@@ -356,29 +319,10 @@ class ShadowPipeline:
             and live_schedule_stable_id not in KNOWN_SCHEDULE_IDS
         ):
             # Do not invent a schedule. Do not call the engine. Record DENY.
-            return self._seal(
-                {
-                    "pipeline": "AAX-8",
-                    "stage": "EVALUATE",
-                    "mode": "SHADOW",
-                    "mutated": False,
-                    "production_sql": False,
-                    "production_mutation": False,
-                    **context,
-                    "authorization": {
-                        "decision": "DENY",
-                        "reason": "unknown_live_schedule",
-                    },
-                    "qalam_ok": False,
-                    "zwnj_fail": False,
-                    "adaeval": {
-                        "validation_failures": ["unknown_live_schedule"],
-                        "target_correctness": False,
-                    },
-                }
-            )
+            return self._deny(context, "unknown_live_schedule")
         writes_before = int(getattr(self.engine.wp, "writes", 0) or 0)
         apply_calls_before = getattr(self.engine, "_apply_calls", 0)
+        journal_before = set(self.engine.journal)
         trace = self.engine.shadow_mistral(
             agent_id=agent_id,
             task_type=task_type,
@@ -393,6 +337,8 @@ class ShadowPipeline:
             raise AdaError("SHADOW_WP_WRITE", "WordPress write during shadow")
         if getattr(self.engine, "_apply_calls", 0) != apply_calls_before:
             raise AdaError("SHADOW_APPLY", "apply_authorized_mutation during shadow")
+        if set(self.engine.journal) != journal_before:
+            raise AdaError("SHADOW_JOURNAL", "shadow must not journal a write intent")
         return self._seal(
             {
                 **trace,
@@ -414,6 +360,7 @@ class ShadowPipeline:
         parent_hmac = trace.get("evidence_hmac")
         writes_before = int(getattr(self.engine.wp, "writes", 0) or 0)
         apply_calls_before = getattr(self.engine, "_apply_calls", 0)
+        journal_before = set(self.engine.journal)
         if not self.verify_evidence(trace):
             return self._seal(
                 {
@@ -480,6 +427,8 @@ class ShadowPipeline:
             raise AdaError("SHADOW_WP_WRITE", "WordPress write during postcondition")
         if getattr(self.engine, "_apply_calls", 0) != apply_calls_before:
             raise AdaError("SHADOW_APPLY", "apply_authorized_mutation during postcondition")
+        if set(self.engine.journal) != journal_before:
+            raise AdaError("SHADOW_JOURNAL", "postcondition must not journal a write intent")
 
         return self._seal(
             {
@@ -532,6 +481,7 @@ class ShadowPipeline:
         """
         parent_hmac = proof.get("evidence_hmac")
         writes_before = int(getattr(self.engine.wp, "writes", 0) or 0)
+        apply_calls_before = getattr(self.engine, "_apply_calls", 0)
         if not self.verify_evidence(proof):
             return self._seal(
                 {
@@ -555,6 +505,8 @@ class ShadowPipeline:
             )
         if int(getattr(self.engine.wp, "writes", 0) or 0) != writes_before:
             raise AdaError("SHADOW_WP_WRITE", "WordPress write during rollback")
+        if getattr(self.engine, "_apply_calls", 0) != apply_calls_before:
+            raise AdaError("SHADOW_APPLY", "apply_authorized_mutation during rollback")
         return self._seal(
             {
                 "pipeline": "AAX-8",

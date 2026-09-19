@@ -1,5 +1,34 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T09:10Z — Greptile 5/5 on 5d331d7; AAX-8 wrapper/escalation proofs
+
+**Fetched HEAD:** `5d331d736c44849c1dd2a0ad11bfed46dc911307`.
+Greptile independently reviewed that SHA at **5/5** (check completed
+08:56:11Z, check `105871068043`). No P0/P1. Parent `e3bd2c7` was 3/5
+P1 (live-read alias); that fix is what Greptile just scored.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `ls /usr/local/bin/ada-inspect`
+  → ENOENT. `readOnly` stayed on. Royadarman not used. AAX-3 AC3 still
+  open. Close AC3 only from live `SHOW TABLES`.
+- AAX-8 repository fail-closed: live-read gate walks
+  `ControlCoreAdapter` subclasses and wrappers (`inner` / bound
+  `get_job.__self__`), not just class-name equality. Path/URL/padded
+  `live_job_id` values never reach `get_job`. Stale job statuses,
+  forged approvals, matching postconditions, and
+  `allow_live_job_read=True` on a fake adapter still cannot journal or
+  apply a write. Sealed `mutated=True` cannot prove postcondition.
+  Rollback remains evidence-only. Local suite **209 passed**.
+- CI on `5d331d7`: jobs `105871061433` / `105871054069`, `runner_id=0`,
+  ~2s, logs 404, Actions banner still "You can't perform that action
+  at this time." Not a pytest failure. Do not rewrite app code.
+- SQL not applied. AAX-8 AC1/AC3/AC4 unchecked. AAX-12/AAX-15 Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T08:55Z — Greptile P1 live-read alias + AAX-8 identity mismatch
 
 **Fetched HEAD:** `e3bd2c7c90ba86c2ad8b171e8f3f806c9749fc49`.
