@@ -1,5 +1,29 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T08:00Z — AAX-8 HMAC covers the full evaluation record
+
+**Fetched HEAD:** `1a1c995f87978f0c1d00dea6954a4792debea0d2`.
+Greptile independently reviewed that SHA at **3/5** with **P1 Security**
+on `unsigned_evidence()` (discussion_r4052536047). PR #2 open, not merged.
+
+### Done this session
+- Ada-readonly reconfirm: hostname `server.maziyarid.com`,
+  `/opt/maziyar-control-core` present, `/usr/local/bin/ada-inspect`
+  still ENOENT. `readOnly` stayed on. Royadarman not used. AAX-3 AC3
+  still open.
+- Greptile P1: HMAC body is now the full record minus `evidence_hmac`.
+  `adaeval`, `proposal`, `expected_postcondition`, `qalam_release`,
+  `evidence_alg`, and `evidence_key_id` are bound. Tampering any of
+  them fails `verify_evidence()`.
+- Hosted Actions on `1a1c995` still fail in ~2s (runner never assigned).
+  Do not rewrite app code for this.
+- Local suite **174 passed**. SQL not applied. AAX-8 AC1/AC3/AC4 remain
+  unchecked. AAX-12/AAX-15 remain Review.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
 ## 2026-09-19T07:35Z — AAX-8 signed evidence; schema still blocked
 
 **Fetched HEAD:** `ca08ec64ba5e0344158e8a5ff4021ba6772de25c`.

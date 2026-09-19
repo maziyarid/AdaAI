@@ -1,4 +1,5 @@
 """AAX-8: non-mutating shadow integration around live snapshot identities."""
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
@@ -86,6 +87,19 @@ def test_shadow_evaluate_consumes_context_and_does_not_mutate():
     assert pipe.evidence[-1]["receipt_id"]
     assert pipe.verify_evidence(trace)
     assert hmac_verify(unsigned_evidence(trace), trace["evidence_hmac"], HMAC)
+    body = unsigned_evidence(trace)
+    assert "evidence_hmac" not in body
+    for key in (
+        "adaeval",
+        "proposal",
+        "expected_postcondition",
+        "qalam_release",
+        "evidence_alg",
+        "evidence_key_id",
+    ):
+        assert key in body
+    assert body["evidence_alg"] == "hmac-sha256"
+    assert body["evidence_key_id"] == "test-key"
 
 
 def test_shadow_wrong_site_is_denied_and_still_does_not_write():
@@ -253,3 +267,56 @@ def test_tampered_shadow_evidence_fails_verify():
     assert pipe.verify_evidence(trace)
     trace["mutated"] = True
     assert pipe.verify_evidence(trace) is False
+
+
+def test_tampered_evaluation_verdict_fails_verify():
+    """Greptile P1: omitted evaluation fields must not still verify."""
+    e = fresh()
+    pipe = ShadowPipeline(e)
+    sealed = pipe.evaluate(
+        agent_id="mistral-canary",
+        task_type="academic_content",
+        project_id="teznevise",
+        site_id="teznevise.ir",
+        proposal=PROPOSAL,
+        live_schedule_stable_id="schedule:seo-scout",
+    )
+    assert pipe.verify_evidence(sealed)
+
+    flipped = deepcopy(sealed)
+    flipped["adaeval"] = dict(flipped["adaeval"])
+    flipped["adaeval"]["target_correctness"] = not flipped["adaeval"]["target_correctness"]
+    assert pipe.verify_evidence(flipped) is False
+
+    failures = deepcopy(sealed)
+    failures["adaeval"] = dict(failures["adaeval"])
+    failures["adaeval"]["validation_failures"] = ["forged_pass"]
+    assert pipe.verify_evidence(failures) is False
+
+    proposal = deepcopy(sealed)
+    proposal["proposal"] = dict(proposal["proposal"])
+    proposal["proposal"]["tool"] = "wp_publish"
+    assert pipe.verify_evidence(proposal) is False
+
+    post = deepcopy(sealed)
+    post["expected_postcondition"] = dict(post["expected_postcondition"])
+    post["expected_postcondition"]["http_status"] = 500
+    assert pipe.verify_evidence(post) is False
+
+    qalam = deepcopy(sealed)
+    qalam["qalam_release"] = {"version": "forged"}
+    assert pipe.verify_evidence(qalam) is False
+
+    alg = deepcopy(sealed)
+    alg["evidence_alg"] = "none"
+    assert pipe.verify_evidence(alg) is False
+
+    key = deepcopy(sealed)
+    key["evidence_key_id"] = "forged-key"
+    assert pipe.verify_evidence(key) is False
+
+    extra = deepcopy(sealed)
+    extra["forged_field"] = True
+    assert pipe.verify_evidence(extra) is False
+    # original remains authentic
+    assert pipe.verify_evidence(sealed)

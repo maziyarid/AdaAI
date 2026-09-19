@@ -53,20 +53,14 @@ def assert_adapter_is_read_only(adapter: Any) -> None:
 
 
 def unsigned_evidence(record: dict[str, Any]) -> dict[str, Any]:
-    """Stable fields hashed for the evidence HMAC. Signature itself is excluded."""
-    return {
-        "pipeline": record.get("pipeline"),
-        "mode": record.get("mode"),
-        "mutated": record.get("mutated"),
-        "receipt_id": record.get("receipt_id"),
-        "task_id": record.get("task_id"),
-        "authorization": record.get("authorization"),
-        "live_schedule_stable_id": record.get("live_schedule_stable_id"),
-        "production_sql": record.get("production_sql"),
-        "production_mutation": record.get("production_mutation"),
-        "zwnj_fail": record.get("zwnj_fail"),
-        "qalam_ok": record.get("qalam_ok"),
-    }
+    """HMAC body: every field except the signature itself.
+
+    Evaluation verdict, proposal, postcondition, and Qalam release are
+    integrity-relevant. A whitelist that omitted them let a retained
+    sealed record be tampered and still verify. alg/key_id must be set
+    on the record before signing so they are bound too.
+    """
+    return {k: v for k, v in record.items() if k != "evidence_hmac"}
 
 
 class ShadowPipeline:
@@ -80,9 +74,9 @@ class ShadowPipeline:
             assert_adapter_is_read_only(adapter)
 
     def _seal(self, record: dict[str, Any]) -> dict[str, Any]:
-        body = unsigned_evidence(record)
         record["evidence_alg"] = "hmac-sha256"
         record["evidence_key_id"] = self.engine.key_id
+        body = unsigned_evidence(record)
         record["evidence_hmac"] = hmac_sign(body, self.engine.hmac_key)
         self.evidence.append(record)
         return record

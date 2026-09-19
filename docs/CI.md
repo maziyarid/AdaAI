@@ -1,5 +1,22 @@
 # CI status
 
+## 2026-09-19T07:50Z — runner still unassigned on `1a1c995`
+
+`maziyarid/AdaAI` is **public**. Latest hosted `pytest` checks on
+`1a1c995f87978f0c1d00dea6954a4792debea0d2`:
+
+- push run `35428657819` job `105859050654` (~2s, `conclusion=failure`)
+- pull_request run `35428655847` job `105859044037` (~1s, `conclusion=failure`)
+
+Checkout / setup-python / pytest never ran. This is Actions
+provisioning, not a test failure. Do not rewrite Ada application code
+for `runner_id=0`. Human check remains Settings → Actions (repo +
+account) and org/rulesets.
+
+Local suite on this tree is the proof. Greptile Review completed on
+the same SHA independently of hosted pytest.
+
+
 ## 2026-09-19T07:15Z — runner_id=0 on a public repo (HEAD `d7e41a6`)
 
 `maziyarid/AdaAI` is **public**. This is not a private-minutes billing
