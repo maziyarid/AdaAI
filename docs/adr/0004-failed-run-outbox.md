@@ -26,3 +26,15 @@ This is not a second scheduler. Control-core jobs/schedules/leases remain runtim
 - In-repo tests prove the state machine. They do not prove production MariaDB.
 - Live VPS currently also has `pd_worker_runs` / `pd_outbox`. Reconcile names before applying `006_ada_failed_run_outbox.sql`.
 - AAX-12 HMAC evidence rules are unchanged.
+
+## 2026-09-19 authority cutover clarification
+
+The live AAX-15 recovery implementation is currently `/srv/maziyar-wp-mcp/state/factory.sqlite3` with `pd_worker_runs` and `pd_outbox`. It is active state, not a disposable test artefact. `pd_outbox` overlaps the proposed MariaDB `ada_failed_runs` responsibility.
+
+**Decision:** control-core MariaDB `ada_failed_runs` / `ada_failed_run_events` is the future AAX-15 execution-recovery authority, but SQLite `pd_outbox` remains authoritative until an explicitly approved quiescent cutover. There is no dual-write or dual-claim phase.
+
+The cutover sequence is: quiesce every SQLite producer/claimer; run the read-only deterministic `ada-reliability/scripts/aax15_sqlite_cutover_plan.py`; refuse the cutover while any `queued`, `retryable`, or `inflight` row exists; preserve idempotency keys exactly and keep parked rows parked; satisfy the encrypted/off-host backup gate; apply/import in one controlled maintenance transaction; switch the runtime writer/claimer to MariaDB before re-enabling producers; verify counts/digests, fencing and outage replay; then retain SQLite read-only as historical evidence only.
+
+`pd_worker_runs` remains historical run evidence after cutover and must not become a second replay authority. Successful-run history does not need to be copied into `ada_failed_runs`, whose scope is failed/pending execution recovery.
+
+Current live planning snapshot on 2026-09-19: 10 `succeeded`, 1 `parked`, zero observed `retryable`/`inflight` rows. This is favourable for planning but is not an Apply grant; it must be rechecked immediately before an approved cutover.

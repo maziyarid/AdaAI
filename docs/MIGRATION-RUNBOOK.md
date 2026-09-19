@@ -159,3 +159,11 @@ Approved `ada-inspect` live reads now supersede the earlier discovery blocker. P
 The prior AAX-15 `pd_worker_runs` / `pd_outbox` canary was also real, but those tables are in SQLite at `/srv/maziyar-wp-mcp/state/factory.sqlite3`, created/used by `/srv/maziyar-wp-mcp/deploy/run_ledger_outbox.py`. `pd_outbox` already owns idempotency, failure class/reason, attempts/max-attempts, retry eligibility, reset condition, leases, external-sync state, and terminal lifecycle. This materially overlaps migration 006. Therefore **006 is HOLD** until the SQLite recovery authority is mapped, migrated, or retired. MariaDB `SHOW TABLES` alone is not a sufficient 006 safety check.
 
 Production SQL remains NONE.
+
+## AAX-15 single-authority cutover gate for migration 006
+
+Migration 006 remains **HOLD**. MariaDB `ada_failed_runs` is the future execution-recovery authority, while SQLite `pd_outbox` remains authoritative until a quiescent, approved switch. Dual-write and dual-claim are forbidden.
+
+Before 006 can move from HOLD: satisfy the full encrypted backup plus off-host key/copy gate; identify and quiesce every `pd_outbox` producer and claimer; run `ada-reliability/scripts/aax15_sqlite_cutover_plan.py` against the frozen SQLite database in read-only mode; require zero `queued`, `retryable`, and `inflight` rows; preserve idempotency keys exactly and preserve parked state; apply/import only inside the approved maintenance window; switch the runtime AAX-15 writer/claimer to MariaDB before re-enabling producers; verify source/target counts and digests, replay fencing and outage catch-up; then retain SQLite read-only for historical evidence with no replay writes or claims.
+
+The planner deliberately emits JSON mapping/evidence only. It emits no executable SQL and cannot perform the cutover.
