@@ -70,6 +70,12 @@ def test_plan_is_secret_free_and_not_executed():
     ]
     assert "jobs" in plan["protected_must_appear_in_schema_dump"]
     assert any("drop ada_*" in t for t in plan["rollback_triggers"])
+    recovery = plan["runtime_recovery_store"]
+    assert recovery["path"] == "/srv/maziyar-wp-mcp/state/factory.sqlite3"
+    assert recovery["engine"] == "SQLite"
+    assert recovery["tables"] == ["pd_worker_runs", "pd_outbox"]
+    assert "HOLD" in recovery["migration_006"]
+    assert any("SQLite" in t and "006 HOLD" in t for t in plan["rollback_triggers"])
 
 
 def test_script_dry_run_prints_json():

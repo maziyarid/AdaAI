@@ -96,12 +96,18 @@ def build_plan() -> dict:
             ],
         },
     ]
+    runtime_recovery_store = {
+        "path": "/srv/maziyar-wp-mcp/state/factory.sqlite3",
+        "engine": "SQLite",
+        "tables": ["pd_worker_runs", "pd_outbox"],
+        "migration_006": "HOLD while pd_outbox is active",
+    }
     rollback_triggers = [
         "apply_never_started → keep backups, do nothing",
         "only ada_* created and protected hashes unchanged → drop ada_* only",
         "ALTER/DROP of live names or job/schedule drift → stop Apply; restore ciphertext with human approval",
         "restore drill checksum mismatch → do not Apply",
-        "live pd_worker_runs/pd_outbox discovered → stop; remap 006",
+        "live SQLite pd_worker_runs/pd_outbox active → stop; migration 006 HOLD until mapped/retired/migrated",
         "control-core unhealthy after a future Apply → restore last checksum-passing dump",
     ]
     plan = {
@@ -122,6 +128,7 @@ def build_plan() -> dict:
             "mode": "0700",
             "owner": "mazcontrol:mazcontrol",
         },
+        "runtime_recovery_store": runtime_recovery_store,
         "protected_must_appear_in_schema_dump": [
             "jobs",
             "schedules",

@@ -1,0 +1,35 @@
+{
+  "authorization_decision": "DENY",
+  "challenge_echo_verified": true,
+  "evidence_hmac": "0d00c4e857e43a53bff939e991f0206a14b084f38ac0cef152d45f26caf097cc",
+  "evidence_verified": true,
+  "job_enqueued": false,
+  "journal_changed": false,
+  "mistral_response_sha256": "2b37e656662c0c9ea8e1642c178b40ccae9901fc16ba9155ebceabdbceec05bb",
+  "model": "mistral-small-latest",
+  "postcondition_proven": false,
+  "postcondition_verified": true,
+  "production_mutation": false,
+  "production_sql": false,
+  "proposal": {
+    "confidence": 0.99,
+    "mutation_type": "METADATA_UPDATE",
+    "payload": {
+      "meta": {
+        "yoast_title": "خدمات"
+      },
+      "resource_id": "42"
+    },
+    "tool": "wp_update_metadata"
+  },
+  "proposal_sha256": "b0ca64dab2f68a56c0cbb0f22c43535cb2dfc491f3847119998ea7821d8a6f24",
+  "rollback_executed": false,
+  "rollback_verified": true,
+  "schedule_mutated": false,
+  "task_completed": false,
+  "task_context_sha256": "500011d1de274892a3fcb49d718e43b953475b6d3baf75d1fe5364034b7c562b",
+  "trace_verified": true,
+  "validation_failures": [],
+  "wp_writes_after": 0,
+  "wp_writes_before": 0
+}

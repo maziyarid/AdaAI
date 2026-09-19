@@ -1,3 +1,12 @@
+# Current authoritative checkpoint — 2026-09-19
+
+- PR #2 head entering this checkpoint: `672bcd38b921bdf9c777b4a1f0942f97a22ebbea`; Greptile 5/5.
+- AAX-3 live baseline is complete and Review: `ada-inspect` confirmed exactly 20 production MariaDB control-core tables, no `ada_*`, no MariaDB `pd_*`.
+- AAX-8 live non-mutating E2E is complete and Review: real AAX-8 task context → live Mistral loopback proposal → ShadowPipeline evaluate → postcondition → rollback; all evidence verified, WordPress writes 0→0, no SQL/enqueue/schedule mutation.
+- AAX-15 returned to Testing after correcting storage authority: live `pd_worker_runs` / `pd_outbox` are SQLite tables in `/srv/maziyar-wp-mcp/state/factory.sqlite3`, not control-core MariaDB. Prior durability canaries remain valid, but AC1's exact control-core-database wording is reopened.
+- AAX-7 remains Testing. Migration 006 is **HOLD** because active SQLite `pd_outbox` overlaps its recovery/retry/lease/idempotency role. Do not run two recovery outboxes.
+- Production SQL: NONE. Production site mutation: NONE. PR not merged/deployed.
+
 # Phase 1 reliability progress log
 
 ## 2026-09-19T10:05Z — Greptile P1 on 57e0fed: live Mistral evidence cannot be a dict

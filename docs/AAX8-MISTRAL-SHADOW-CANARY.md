@@ -1,6 +1,6 @@
 # AAX-8 — genuine non-mutating Mistral shadow canary
 
-Status: **fail-closed executor bind in-repo. Live worker chat not executed.**
+Status: **live non-mutating Mistral shadow E2E executed successfully; AAX-8 is Review.**
 Date: 2026-09-19. Live worker source inspected via `grok-ada-readonly`
 `cat /srv/community-mcp/mistral-worker/index.mjs` (619 lines). Values of
 env files were not read. `curl` to `:9102` is POLICY_DENIED on the
@@ -98,3 +98,16 @@ evidence. AC1 / AC3 / AC4 stay **OPEN** until the loopback POST is
 actually run on the VPS.
 
 PRODUCTION_SQL: **NONE**. PRODUCTION_MUTATION: **NONE**.
+
+## Live VPS evidence — 2026-09-19
+
+On exact repo head `672bcd38b921bdf9c777b4a1f0942f97a22ebbea`, the live `mistral-small-latest` worker participated through the loopback-only `/internal/chat` transport. The first transport canary was challenge-bound and HMAC-valid with WordPress writes 0→0, no SQL, no enqueue, and no schedule mutation.
+
+A stronger E2E then used the real AAX-8 Agiflow task description as task context. The live model returned the constrained metadata proposal with a fresh challenge echo. That exact model proposal was fed into `ShadowPipeline.evaluate`, then `prove_postcondition` and `rollback`. All three evidence records verified. Authorization was DENY; `postcondition_proven=false`; `task_completed=false`; `rollback_executed=false`; journal unchanged; WordPress writes 0→0; production SQL/mutation/job enqueue/schedule mutation all false.
+
+Secret-free hashes:
+- task context: `500011d1de274892a3fcb49d718e43b953475b6d3baf75d1fe5364034b7c562b`
+- Mistral response: `2b37e656662c0c9ea8e1642c178b40ccae9901fc16ba9155ebceabdbceec05bb`
+- evaluated proposal: `b0ca64dab2f68a56c0cbb0f22c43535cb2dfc491f3847119998ea7821d8a6f24`
+
+The secret-free evidence summary is `docs/AAX8-LIVE-MISTRAL-E2E-EVIDENCE.json`. All AAX-8 ACs are now evidenced; Review, not Done.

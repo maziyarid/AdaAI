@@ -13,13 +13,15 @@ This is additive. It must not destroy existing control-core tables.
 4. `maziyar-control-core.service` is healthy on 127.0.0.1:8770.
 5. Diff of SQL reviewed: additive `CREATE TABLE IF NOT EXISTS ada_*` plus the single bootstrap `INSERT IGNORE` of `('global','*',1)` in `001_ada_memory.sql`. No `DROP`/`ALTER` of existing control-core tables. Stop if the diff contains anything else.
 6. Production cutover approval recorded (human, not the proposing model).
-7. **Live durability reconciliation complete.** Stop before any Apply
-   step, including `006_ada_failed_run_outbox.sql`. Satisfy the
-   "Live source reconciliation" section first. If live
-   `pd_worker_runs` / `pd_outbox` exist, do not create a second
-   overlapping recovery outbox. The migration file is
-   `006_ada_failed_run_outbox.sql`; the table it creates is
-   `ada_failed_runs` (plus `ada_failed_run_events`).
+7. **Live durability reconciliation complete across every runtime store.**
+   Stop before any Apply step, including `006_ada_failed_run_outbox.sql`.
+   Live MariaDB has no `pd_*`, but the active recovery authority is SQLite:
+   `/srv/maziyar-wp-mcp/state/factory.sqlite3` contains `pd_worker_runs` and
+   `pd_outbox`. `pd_outbox` overlaps 006 failure, retry, lease, idempotency
+   and external-sync responsibilities. **006 HOLD:** do not create
+   `ada_failed_runs` while this SQLite outbox remains active. First
+   map/migrate/retire one authority and prove exactly one runtime recovery
+   outbox remains.
 
 ## Live source reconciliation (AAX-7, STOP before Apply)
 
@@ -117,7 +119,7 @@ MariaDB `control_core.py` + additive `ada-reliability/sql/mariadb/*`.
 
 ```bash
 # on VPS, as the control-core DB user — example only
-# STOP if live pd_worker_runs / pd_outbox reconciliation is unfinished.
+# 006 remains HOLD while the active SQLite pd_outbox recovery authority exists.
 mysql --defaults-file=/etc/ada/mysql.cnf control_core \
   < /srv/ada/ada-reliability/sql/mariadb/001_ada_memory.sql
 mysql --defaults-file=/etc/ada/mysql.cnf control_core \
@@ -128,8 +130,9 @@ mysql --defaults-file=/etc/ada/mysql.cnf control_core \
   < /srv/ada/ada-reliability/sql/mariadb/004_ada_qalam_eval.sql
 mysql --defaults-file=/etc/ada/mysql.cnf control_core \
   < /srv/ada/ada-reliability/sql/mariadb/005_ada_agiflow_projection.sql
-mysql --defaults-file=/etc/ada/mysql.cnf control_core \
-  < /srv/ada/ada-reliability/sql/mariadb/006_ada_failed_run_outbox.sql
+# DO NOT APPLY 006 while /srv/maziyar-wp-mcp/state/factory.sqlite3
+# contains the active pd_outbox recovery authority.
+# mysql ... < 006_ada_failed_run_outbox.sql   # HOLD
 ```
 
 Do not restart WordPress MCP, OAuth gateway, GSC MCP, or unrelated units.
@@ -148,3 +151,11 @@ Existing `jobs` / `schedules` / lease tables must still be readable.
 - Did not connect to production MariaDB / did not `SHOW TABLES`.
 - Did not apply any `ada_*` SQL.
 - Did not run a live Teznevise / WordPress write canary.
+
+## 2026-09-19 authoritative cross-store reconciliation
+
+Approved `ada-inspect` live reads now supersede the earlier discovery blocker. Production control-core MariaDB has exactly the expected 20 control-core tables, with no `ada_*` and no `pd_*`. Schema-only metadata was captured for jobs, schedules, dead_letter_queue, pending_external_sync, job_results, and schema_migrations; no rows or secrets were dumped.
+
+The prior AAX-15 `pd_worker_runs` / `pd_outbox` canary was also real, but those tables are in SQLite at `/srv/maziyar-wp-mcp/state/factory.sqlite3`, created/used by `/srv/maziyar-wp-mcp/deploy/run_ledger_outbox.py`. `pd_outbox` already owns idempotency, failure class/reason, attempts/max-attempts, retry eligibility, reset condition, leases, external-sync state, and terminal lifecycle. This materially overlaps migration 006. Therefore **006 is HOLD** until the SQLite recovery authority is mapped, migrated, or retired. MariaDB `SHOW TABLES` alone is not a sufficient 006 safety check.
+
+Production SQL remains NONE.

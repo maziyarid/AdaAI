@@ -49,3 +49,7 @@ Full `engine.py` + `test_phase1_contracts.py` recovered from `2c5e723` and pushe
 - AAX-12 in-repo Agiflow steward: mapping, HMAC-issued Review evidence, one-time human Done grant, human-edit conflict, outbox replay of ids only, no runtime writes, no ClickUp dependency. Caller-constructed evidence is rejected (`UNKNOWN_EVIDENCE`).
 - AAX-15 in-repo failed-run outbox (distinct from AAX-12 projection outbox): parked vs retryable vs inflight vs dead-letter, `replay=UNAVAILABLE` when persist fails, Agiflow handoff through the steward, no WordPress/packet mutation from the outbox itself. In-process restart simulation is not VPS persistence.
 - Engine + steward pytest green from the working tree.
+
+## 2026-09-19 blocker update
+
+`ada-inspect` is installed and live MariaDB schema discovery is complete; AAX-3 is no longer blocked. The current migration blocker is architectural: `/srv/maziyar-wp-mcp/state/factory.sqlite3` contains the active `pd_worker_runs` / `pd_outbox` recovery store, so MariaDB migration 006 is HOLD until one recovery authority is mapped/migrated/retired. GitHub-hosted Actions also remains a separate runner-assignment issue (`runner_id=0`; pytest never starts).

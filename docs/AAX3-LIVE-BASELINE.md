@@ -428,3 +428,9 @@ AC2/AC3 remain unchecked until `ada-inspect units/hashes/tables`.
 No production SQL. PR not merged. PR not deployed.
 
 
+
+## Live MariaDB table proof — 2026-09-19
+
+The reviewed least-privilege `ada-inspect` helper is now installed at `/usr/local/bin/ada-inspect` and executed as `mazcontrol` without clearing the Grok profile's `readOnly` flag. `ada-inspect tables` returned exactly the 20 expected control-core MariaDB tables and **no `ada_*` / no `pd_*` tables**. Schema-only CREATE/column/index metadata was captured for `jobs`, `schedules`, `dead_letter_queue`, `pending_external_sync`, `job_results`, and `schema_migrations`; no rows or secrets were dumped. The separate AAX-15 `pd_*` recovery store was subsequently confirmed to be SQLite, not this MariaDB.
+
+All AAX-3 acceptance criteria are now evidenced; AAX-3 is Review.

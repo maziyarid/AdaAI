@@ -82,5 +82,8 @@ def test_runbook_stops_before_006_until_legacy_outbox_reconciled():
     assert "pd_worker_runs" in pre
     assert "pd_outbox" in pre
     assert "pending_external_sync" in pre
+    assert "/srv/maziyar-wp-mcp/state/factory.sqlite3" in pre
+    assert "006 HOLD" in pre
+    assert "SQLite" in pre
     # Do not name the migration file 006_ada_failed_runs.
     assert "006_ada_failed_runs" not in runbook

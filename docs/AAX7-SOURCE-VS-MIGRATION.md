@@ -120,3 +120,11 @@ only after live `pd_worker_runs` / `pd_outbox` presence is known.
 5. Human approval
 
 Production SQL this session: **NONE**.
+
+## 2026-09-19 live cross-store decision
+
+Actual production metadata is now known. MariaDB has the expected 20 control-core tables and no `ada_*` / `pd_*`. The active AAX-15 recovery store is separate SQLite `/srv/maziyar-wp-mcp/state/factory.sqlite3` with `pd_worker_runs` and `pd_outbox`.
+
+This changes the 006 classification from conditional to **OVERLAP / HOLD**. SQLite `pd_outbox` already provides unique idempotency, failure metadata, retry attempts/eligibility, reset conditions, lease ownership/expiry, external-sync state, and terminal state. `006_ada_failed_run_outbox.sql` would create another recovery authority with materially the same responsibilities. Do not run both. Migrations 001–005 remain additive candidates subject to human approval; 006 requires an explicit map/migrate/retire decision first.
+
+AAX-7 remains Testing. Production SQL remains NONE.

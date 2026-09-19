@@ -3,9 +3,13 @@
 -- Does not create jobs, schedules or leases. Not a second scheduler.
 -- Do not apply to production without the migration runbook and approval.
 --
--- Live VPS may record overlapping recovery in pd_worker_runs / pd_outbox.
--- Those names are not in control_core.py. Confirm with ada-inspect tables
--- before Apply. Do not run two runtime outboxes.
+-- LIVE HOLD (2026-09-19): the current recovery authority already stores
+-- pd_worker_runs / pd_outbox in /srv/maziyar-wp-mcp/state/factory.sqlite3.
+-- Live control-core MariaDB has no pd_* tables, but that does NOT mean recovery
+-- is absent. pd_outbox overlaps this migration's failure/retry/lease/idempotency
+-- responsibilities. Do NOT apply 006 while the SQLite recovery outbox is active.
+-- First choose and prove one authority (map/migrate/retire the SQLite outbox or
+-- redesign 006). Never run two runtime recovery outboxes.
 
 CREATE TABLE IF NOT EXISTS ada_failed_runs (
   id CHAR(36) NOT NULL,

@@ -119,10 +119,11 @@ def test_isolated_rehearsal_does_not_claim_production_or_show_tables():
         assert label in text
 
 
-def test_006_does_not_claim_live_pd_tables_exist():
+def test_006_holds_when_live_sqlite_pd_outbox_is_active():
     sql = (SQL_DIR / "006_ada_failed_run_outbox.sql").read_text(encoding="utf-8")
-    assert "currently records" not in sql
-    assert "Confirm with ada-inspect tables" in sql
+    assert "/srv/maziyar-wp-mcp/state/factory.sqlite3" in sql
+    assert "Do NOT apply 006" in sql
+    assert "SQLite recovery outbox is active" in sql
     assert "CREATE TABLE IF NOT EXISTS jobs" not in sql
     assert "CREATE TABLE IF NOT EXISTS pending_external_sync" not in sql
 
