@@ -1,3 +1,12 @@
+## 2026-09-19 — AAX-11 staged dispatcher supervision
+
+- Added a repository-only systemd supervision package under `ops/portfolio-dispatcher/`; no unit was installed, enabled or started.
+- Dispatcher service forces `DISPATCH_ENABLED=false` in `ExecStart` via `/usr/bin/env` as well as declaring it in the unit, so an optional environment file cannot promote staged observation to live dispatch.
+- Added a read-only durable-heartbeat watchdog: missing/invalid/stale dispatcher heartbeat recommends restart; stale leases/open circuits are reported as degraded evidence without causing restart loops.
+- Added a rate-limited recovery unit (three activations/hour) plus a two-minute timer. Systemd syntax verification passed; focused tests passed.
+- Live read-only watchdog observed the existing dispatcher heartbeat at 2026-09-17T16:52:32+00:00 as stale, confirming AAX-11 still requires an explicitly approved production install/start before it can close.
+- No legacy schedule was retired and no production dispatch, SQL, WordPress mutation or service restart occurred.
+
 ## 2026-09-19 — AAX-15 single-authority cutover decision
 
 - Exact branch head before this work: `92c4a12431a759bf8394e8e35b4c172cf026dc3c`; isolated worktree clean.
