@@ -44,11 +44,17 @@ The current production host is about 4 vCPU / 3.6 GiB RAM with no NVIDIA GPU run
 
 ## Repository layout
 
-- `ada-context-core/` — earlier reliability prototype/reference implementation. Its contracts are useful, but its PostgreSQL assumptions must be reconciled with the live MariaDB control core before deployment.
-- `docs/` — canonical architecture, roadmap, deployment and handoff documentation.
-- `AGENTS.md` — mandatory contributor/agent contract.
+- `ada-reliability/` — Phase-1 executable contract (bootstrap, receipts, authorize, approvals, journal, ZWNJ validator, Mistral shadow, Agiflow projection steward, failed-run outbox). Tests do not require MariaDB.
+- `ada-reliability/sql/mariadb/` — additive `ada_*` tables for the live MariaDB instance.
+- `runtime/control-core-baseline/` — client adapter plus a secret-free snapshot of live `/opt/maziyar-control-core` (`live/control_core.py`). Live MariaDB `SHOW TABLES` / systemd ActiveState still gated.
+- `skills/qalam/` — versioned writing registry (router, fa-IR overlays, Teznevise ZWNJ).
+- `skills/art-of-writing-bible/` — Bible 2.0.0 + history 1.0.0–1.3.0.
+- `skills/persian-medical-human-writing/` — medical overlay.
+- `ada-context-core/` — earlier PostgreSQL prototype. Reference only. Do not deploy.
+- `docs/` — architecture, roadmap, runbooks, blockers, ADRs.
 
 The original Grok export is preserved on branch `archive/grok-export-2026-09-16` and is not part of the production architecture.
+
 
 ## Qalam and Persian writing
 
@@ -83,6 +89,11 @@ No Grok App Builder scaffold, preview branding, Vercel demo shell, generated gam
 
 ## Tests
 
-The earlier Context Core prototype contract suite passed locally, but the next milestone is integration against the actual live MariaDB-backed control-plane design. Do not treat prototype tests as proof of production readiness.
+```bash
+cd ada-reliability && python3 -m pytest tests -v
+```
 
-See `docs/ROADMAP.md` for the canonical build order.
+22 contract tests covering the 18 required Phase-1 cases passed on 2026-09-16. Prototype `ada-context-core` tests are not production proof.
+
+See `docs/ROADMAP.md`, `docs/BLOCKERS.md`, `docs/MIGRATION-RUNBOOK.md`.
+

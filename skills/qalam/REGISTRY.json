@@ -1,0 +1,180 @@
+{
+  "name": "ada-qalam-registry",
+  "status": "mirrored-from-canonical-sources",
+  "authoritative_runtime": "Ada Context Core",
+  "mirrors": [
+    "XMemo",
+    "Engram"
+  ],
+  "current": {
+    "release_pointer": "skills/qalam/RELEASE.json",
+    "qalam_router": "1.1.0",
+    "art_of_writing_bible": "2.0.0",
+    "eval_pack": "1.3.0",
+    "eval_pack_validates": "art-of-writing-bible@2.0.0",
+    "pointer": "current"
+  },
+  "provenance": [
+    {
+      "source": "github.com/maziyarid/agents writing/qalam",
+      "role": "router"
+    },
+    {
+      "source": "github.com/maziyarid/agents writing/art-of-writing-bible/references",
+      "role": "fa-IR overlays"
+    },
+    {
+      "source": "AdaAI archive/grok-export-2026-09-16 skills/art-of-writing-bible",
+      "role": "bible + history"
+    },
+    {
+      "source": "AdaAI archive/grok-export-2026-09-16 skills/persian-medical-human-writing",
+      "role": "medical overlay"
+    }
+  ],
+  "assets": [
+    {
+      "path": "skills/art-of-writing-bible/CHANGELOG.md",
+      "sha256": "78325af14d02fca4dcaa641347aa3405c4efcf9dde2181b5f64a30d558bef3fc",
+      "bytes": 3681
+    },
+    {
+      "path": "skills/art-of-writing-bible/SKILL.md",
+      "sha256": "9ecc9f30924e001ff480d631aad075bb41c257321b2854307e435051b21fcdb9",
+      "bytes": 13270
+    },
+    {
+      "path": "skills/art-of-writing-bible/SKILL.v1.0.0.md",
+      "sha256": "cfb756494d19d7debfac8b7481b61bca797276281204101ddafebc2d6a05f90a",
+      "bytes": 26480
+    },
+    {
+      "path": "skills/art-of-writing-bible/SKILL.v1.1.0.md",
+      "sha256": "68920bbb91930e4c174b8b3fa7e12c2786adb78fa9a6928bba8ecd15a8eb3ec0",
+      "bytes": 33820
+    },
+    {
+      "path": "skills/art-of-writing-bible/SKILL.v1.2.0.md",
+      "sha256": "40f3f381c9b7671adabc328f4d5c3db3b90ed70b67af6e21ef7bf37dbf017449",
+      "bytes": 34959
+    },
+    {
+      "path": "skills/art-of-writing-bible/SKILL.v1.3.0.md",
+      "sha256": "ce30875a0a469091b509728ed0a79da43127f340c001d140a74ec41d5cd9ae75",
+      "bytes": 39284
+    },
+    {
+      "path": "skills/art-of-writing-bible/evals/evals.json",
+      "sha256": "dd53422f66bcc0c3f796aa64b05b21bb550c207fb2726d3873971cc88b1c2bd8",
+      "bytes": 2837
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/SOURCE-MANIFEST.md",
+      "sha256": "233a0754e781e646038a6e90706f1fe7377a7175d731913149eee4c7a74b81b4",
+      "bytes": 2479
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/SOURCE-MANIFEST.v1.0.0.md",
+      "sha256": "ae4ea629c377cebef72ae3b1b1e0393e1de040cfe618079de8b8a7224ca6fd04",
+      "bytes": 2907
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/finding-index.md",
+      "sha256": "68fd29d6bbe7822a4889c9573517be59118cb910c01a1637d2c51ad8d9c65491",
+      "bytes": 4555
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/iranian-dari.md",
+      "sha256": "5afb2e497a6bfcef9c81238c54dbd9926d5ef6a6be520876f537bf135190c8c7",
+      "bytes": 3008
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/landing-product-ux.md",
+      "sha256": "a8775130abb56e01a423fd193ce0b7bc00cf2e07170687f320857c2d5d49b2ae",
+      "bytes": 2316
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/overlays.md",
+      "sha256": "6060ba49a29f1c1cd939ceb15fca1fc49998bf2aa84eb7a59f069a288b9aa18a",
+      "bytes": 15835
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/pattern-bank.md",
+      "sha256": "561701147767d3c72961fd364197b0d54432af6261d648cc2f96674ce2078ae8",
+      "bytes": 37081
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/philosophycaf-corpus.md",
+      "sha256": "4a43babfbf48e608f30b2b9f4bd8ba7ef71ae89c2086bcd3751849a4a784433a",
+      "bytes": 20323
+    },
+    {
+      "path": "skills/art-of-writing-bible/references/register-atlas.md",
+      "sha256": "f4a2af86d92381b6cab382942cc3e028e46323771fe0c41f954130cf299925ff",
+      "bytes": 3046
+    },
+    {
+      "path": "skills/persian-medical-human-writing/CHANGELOG.md",
+      "sha256": "169e39f16f1403aa6d6b5021fa72c173dd0bde6ea2f2b8ecc2ba8c2094285d59",
+      "bytes": 2122
+    },
+    {
+      "path": "skills/persian-medical-human-writing/SKILL.md",
+      "sha256": "9e2efff7a797accf45df6af1ceb60e3c27bcda31cbafc0d95b4d22e97a200169",
+      "bytes": 25616
+    },
+    {
+      "path": "skills/persian-medical-human-writing/evals/evals.json",
+      "sha256": "a47968106d7c3f46b5ada0a97bcb25577fbf92466bea9c23683766c4b8953ab8",
+      "bytes": 3322
+    },
+    {
+      "path": "skills/persian-medical-human-writing/references/pattern-bank.md",
+      "sha256": "b3dbb5561b864e289f48c54528c9c737922233be8bfa65524029718f37d1e463",
+      "bytes": 7323
+    },
+    {
+      "path": "skills/persian-medical-human-writing/references/registers-and-corpus.md",
+      "sha256": "c06ad49e2921107e163b556a98b549738eb4505b7bdd81fa348e02bc4faedeea",
+      "bytes": 12376
+    },
+    {
+      "path": "skills/qalam/AGENTS-WRITING-README.md",
+      "sha256": "23dd0d06c4f241abc3908f14bcfd8bc1890cb01709ef223f67eadcd45f9317bc",
+      "bytes": 2378
+    },
+    {
+      "path": "skills/qalam/fa-ir-overlays/fa-ir-product-lexicon.md",
+      "sha256": "b34383911103007acdf33ed37f02c2cb8ab7ba957b4372a9f90d5d9645b603c8",
+      "bytes": 5363
+    },
+    {
+      "path": "skills/qalam/fa-ir-overlays/tool-routing.md",
+      "sha256": "96e828677ca5989fa531eadf1e67a76911a80afd6d01bfa643618be6000ac0b6",
+      "bytes": 2267
+    },
+    {
+      "path": "skills/qalam/fa-ir-overlays/ux-writing-fa-ir.md",
+      "sha256": "836c1331ac9004f09e304164a38ea5de333f935c360ff66ac07c66bf18a46f55",
+      "bytes": 11114
+    },
+    {
+      "path": "skills/qalam/router/RUNTIME-INTEGRATION.md",
+      "sha256": "9f03d8621599c86a0e7ddc366bbb5b438713a5c4f17aafd129b54b399f99973e",
+      "bytes": 8154
+    },
+    {
+      "path": "skills/qalam/router/SKILL.md",
+      "sha256": "b9908d962657ead8a48eb3c1e822950efa83743cf94c1ce6f579416d7073c40f",
+      "bytes": 4649
+    }
+  ],
+  "site_rules": [
+    {
+      "site": "teznevise.ir",
+      "rule": "Persian Teznevise content contains zero U+200C ZWNJ",
+      "scope": "site:teznevise.ir",
+      "do_not_generalize": true
+    }
+  ]
+}

@@ -41,32 +41,29 @@ Status: partially complete through live inspection.
 
 ## Phase 1 — merge Ada into the existing control core
 
-Goal: one source of truth, not a second scheduler/database.
+Status: **contract implemented in-repo; live VPS import and canary blocked.** See `docs/BLOCKERS.md`.
 
-### Work
+### Done in repository (2026-09-16)
 
-- Move/copy the live control-core source into the AdaAI repository as an explicit migration baseline.
-- Preserve current behavior before refactor through contract/integration tests.
-- Add schema migrations to the existing MariaDB database for:
-  - memory records and immutable versions;
-  - provenance and priority;
-  - scope/dependency versions;
-  - project/workflow current state;
-  - context receipts;
-  - receipt dependencies;
-  - agent passports;
-  - tool registry;
-  - approval tickets/events;
-  - mutation journal;
-  - model registry;
-  - backup/restore records;
-  - mirror status.
-- Keep existing jobs/schedules/leases/DLQ/audit tables and migrate only where necessary.
-- Implement deterministic Context Pack bootstrap.
-- Implement scoped receipt freshness instead of global-only revision invalidation.
-- Add privacy classes: `LOCAL_ONLY`, `LOCAL_PREFERRED`, `EXTERNAL_OK`.
+- Deterministic bootstrap + scoped receipts (`ada-reliability`).
+- Additive MariaDB SQL (`ada_*` tables only).
+- Agent passports, `authorize()`, approval tickets, mutation journal.
+- Untrusted external envelope + prompt-injection fixture.
+- Teznevise zero-U+200C validator.
+- Mistral shadow-mode adapter (no writes).
+- Qalam registry mirrored from `maziyarid/agents` + archive Bible.
+- 22 automated tests including the 18 required cases.
+- Migration/rollback runbooks and ADRs.
+
+### Not done (blocked)
+
+- Import of live `/opt/maziyar-control-core` source (no VPS access this session).
+- Applying SQL to production MariaDB.
+- Wrapping a real scheduled Mistral job on the VPS.
+- Live Teznevise canary.
 
 ### Explicitly defer
+
 
 - pgvector;
 - semantic/autonomous memory promotion;

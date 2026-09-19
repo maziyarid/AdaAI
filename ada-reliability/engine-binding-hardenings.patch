@@ -1,0 +1,9 @@
+# Binding hardenings (AAX-1 / AAX-2)
+# Recovered engine.py from 2c5e723, then applied fail-closed bindings in-tree:
+# - authorize uses stored passport (agent + version), empty allowed_sites deny
+# - receipt agent/task/site/payload/passport/mutation class binding
+# - approval tickets stay inside receipt scope
+# - consume_approval requires snapshot_hash when the ticket bound one
+# - journal_intent / apply_authorized_mutation require matching ALLOW + receipt
+# - policy receipts hash the ACTIVE asset bundle (real files), not a placeholder
+# Do not replace the engine with placeholders again.

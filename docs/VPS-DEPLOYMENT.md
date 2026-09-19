@@ -1,14 +1,20 @@
 # AdaAI Phase-1 VPS Deployment
 
-This is an inspection-first deployment plan for the existing production VPS. It intentionally avoids assumptions about package manager state, PostgreSQL availability, Nginx layout, or the existing MCP control plane until preflight confirms them.
+Inspection-first. The live control plane is MariaDB-backed `maziyar-control-core` on `127.0.0.1:8770`. Do **not** install PostgreSQL or a second scheduler.
+
+For additive `ada_*` schema see `docs/MIGRATION-RUNBOOK.md` and `docs/ROLLBACK-RUNBOOK.md`.
+
+> **Correction 2026-09-16:** Stages below that mention PostgreSQL, port 8791, or `ada-context-core.service` are prototype leftovers. Do not follow them on the live VPS. Phase 1: back up MariaDB → apply additive `ada_*` SQL after approval → wrap Mistral in shadow mode → one Teznevise canary.
 
 ## Safety boundary
+
 
 - Do not restart or reconfigure the existing VPS MCP, WordPress MCP, OAuth gateway, session router, or unrelated site services as part of the Context Core deployment.
 - Do not expose the private Context Core REST port publicly.
 - Do not install a local 4B+ LLM on the current production VPS during Phase 1.
 - Do not seed raw conversation history as canonical memory.
-- Back up relevant configuration before changing Nginx, systemd, PostgreSQL, or OAuth routing.
+- Back up relevant configuration before changing Nginx, systemd, MariaDB, or OAuth routing.
+
 
 ## Canonical paths and ports
 

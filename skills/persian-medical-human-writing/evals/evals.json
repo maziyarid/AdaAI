@@ -1,0 +1,31 @@
+{
+  "skill_name": "persian-medical-human-writing",
+  "status": "prompts-only-not-yet-run",
+  "notes": "Do not mark the skill final until these (or clinic-supplied pages) have been drafted with the skill and compared to human Persian the clinic likes.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "rhinoplasty-service-opening",
+      "prompt": "برای صفحه خدمت «جراحی بینی» در سایت کلینیک دکتر باستانی‌نژاد، فقط بخش بالای صفحه را بنویس: عنوان، یک پاراگراف آغاز، و سه تیتر پیشنهادی. مخاطب بیمار ایرانی مضطرب است که بین چند جراح مقایسه می‌کند. نوبت حضوری است نه آنلاین. لحن فروشنده نباشد و هیچ تضمینی نده.",
+      "expected_output": "Persian patient-clinic register. Opens with variables that change the result (breathing, skin, cartilage, facial proportion), not 'one of the most popular surgeries in the world'. No ویزیت آنلاین, no بهترین, no صفر تا صد. Headings sound like patient questions."
+    },
+    {
+      "id": 2,
+      "name": "revision-faq",
+      "prompt": "یک پرسش‌متداول بنویس: «چه زمانی جراحی ترمیمی بینی انجام می‌شود؟» پاسخ برای سایت کلینیک. از روی الگوی تعریف-علل-علائم-درمان ننویس.",
+      "expected_output": "First sentence answers. Timing depends on healing and examination, no invented month that is always correct. Calm, no sales. No جمع‌بندی heading."
+    },
+    {
+      "id": 3,
+      "name": "booking-copy",
+      "prompt": "متن کوتاه صفحه نوبت‌دهی: هزینه ویزیت حضوری ۶۰۰ هزار تومان، پرداخت اینترنتی، انتخاب زمان از تقویم شمسی. این ویزیت آنلاین نیست.",
+      "expected_output": "Operational Persian: نوبت حضوری، هزینه ویزیت حضوری، پرداخت اینترنتی. Mentions patient info, mobile verification, Jalali slot, payment, confirmation — without OTP/API words."
+    },
+    {
+      "id": 4,
+      "name": "anti-mayo-sinusitis",
+      "prompt": "این پیش‌نویس دانشنامه‌ای را به مقاله مناسب سایت یک جراح گوش و حلق و بینی در تهران بازنویسی کن. ساختار تعریف-علائم-علل-درمان را نشکن مگر اینکه واقعاً به درد خواننده بخورد. متن مبدأ: «رینوسینوزیت یک بیماری شایع مراقبت‌های اولیه است. در این مقاله قصد داریم صفر تا صد پلن‌های درمان سینوزیت را بررسی کنیم. اکثر موارد با درمان علامتی برطرف می‌شود اما گاهی جراحی آندوسکوپی لازم است.»",
+      "expected_output": "Should refuse صفر تا صد and پلن and مراقبت‌های اولیه as house voice. Keep the medical caution that most acute cases are symptomatic. Sound Iranian. Offer a clinic next step (in-person exam) without guaranteeing surgery or cure. Distinct from Nabz sinusitis page — do not copy its bacteria lists or ARIA paragraph."
+    }
+  ]
+}

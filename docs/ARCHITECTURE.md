@@ -1,6 +1,7 @@
 # AdaAI Canonical Architecture
 
-Status: proposed target architecture after live VPS review on 2026-09-16.
+Status: Phase-1 reliability layer implemented in-repo (2026-09-16). Live VPS import still pending. Prototype PostgreSQL Context Core is **not** deployed.
+
 
 ## 1. Core principle
 

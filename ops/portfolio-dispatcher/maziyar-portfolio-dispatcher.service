@@ -1,0 +1,36 @@
+[Unit]
+Description=Maziyar portfolio dispatcher (observation-only until approved cutover)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=maziyarid
+Group=maziyarid
+WorkingDirectory=/srv/maziyar-wp-mcp
+EnvironmentFile=-/etc/maziyar-portfolio-dispatcher.env
+Environment=DISPATCH_ENABLED=false
+ExecStart=/usr/bin/env DISPATCH_ENABLED=false /srv/maziyar-wp-mcp/.venv/bin/python /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher.py --serve
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/srv/maziyar-wp-mcp/deploy /srv/maziyar-wp-mcp/config
+ReadWritePaths=/srv/maziyar-wp-mcp/state
+
+[Install]
+WantedBy=multi-user.target
