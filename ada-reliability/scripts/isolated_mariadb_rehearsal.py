@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -316,46 +317,67 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
            LIMIT 1;""",
         db,
     ).strip()
-    # Synchronize on an advisory lock acquired only after the row-level
-    # FOR UPDATE succeeds. This proves the holder owns order_job_a before
-    # the competing SKIP LOCKED selector runs; a fixed startup delay can
-    # race under host load and produce false rehearsal failures.
-    lock_name = f"ada_rehearsal_{label}_{os.getpid()}"
-    holder_sql = (
-        f"START TRANSACTION; SELECT id FROM jobs WHERE id='{order_job_a}' FOR UPDATE; "
-        f"SELECT GET_LOCK('{lock_name}',0); "
-        "SELECT SLEEP(2); "
-        f"SELECT RELEASE_LOCK('{lock_name}'); COMMIT;"
-    )
+    # Keep one interactive MariaDB connection open for the entire contention
+    # probe. Its LOCK_CONFIRMED marker is emitted only after FOR UPDATE
+    # returns, and the transaction is committed only after the competing
+    # SKIP LOCKED query completes. This removes timing from lock lifetime.
     holder = subprocess.Popen(
-        [client, "--no-defaults", f"--socket={sock}", "-N", "-B", "-D", db, "-e", holder_sql],
+        [
+            client,
+            "--no-defaults",
+            f"--socket={sock}",
+            "-N",
+            "-B",
+            "--unbuffered",
+            "-D",
+            db,
+        ],
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
     )
-    lock_owner = "0"
-    lock_deadline = time.monotonic() + 2.0
+    if holder.stdin is None or holder.stdout is None or holder.stderr is None:
+        holder.terminate()
+        fail("SKIP LOCKED holder pipes unavailable")
+    expected_lock_marker = f"LOCK_CONFIRMED:{order_job_a}"
+    holder.stdin.write(
+        "START TRANSACTION;\n"
+        f"SELECT CONCAT('LOCK_CONFIRMED:',id) "
+        f"FROM jobs WHERE id='{order_job_a}' FOR UPDATE;\n"
+    )
+    holder.stdin.flush()
+    lock_confirmed = False
+    holder_output: list[str] = []
+    lock_deadline = time.monotonic() + 5.0
     while time.monotonic() < lock_deadline:
         if holder.poll() is not None:
-            _hout, herr = holder.communicate()
+            herr = holder.stderr.read()
             fail("SKIP LOCKED holder exited before lock confirmation: " + herr.strip())
-        lock_owner = run_sql(
-            client,
-            sock,
-            f"SELECT COALESCE(IS_USED_LOCK('{lock_name}'),0);",
-            db,
-        ).strip()
-        if lock_owner not in {"", "0"}:
+        readable, _, _ = select.select([holder.stdout], [], [], 0.1)
+        if not readable:
+            continue
+        line = holder.stdout.readline().strip()
+        if line:
+            holder_output.append(line)
+        if line == expected_lock_marker:
+            lock_confirmed = True
             break
-        time.sleep(0.05)
-    if lock_owner in {"", "0"}:
+    if not lock_confirmed:
         holder.terminate()
         try:
-            _hout, herr = holder.communicate(timeout=2)
+            holder.wait(timeout=2)
         except subprocess.TimeoutExpired:
             holder.kill()
-            _hout, herr = holder.communicate(timeout=2)
-        fail("SKIP LOCKED holder did not confirm row-lock acquisition: " + herr.strip())
+            holder.wait(timeout=2)
+        herr = holder.stderr.read()
+        fail(
+            "SKIP LOCKED holder did not confirm row-lock acquisition: "
+            + herr.strip()
+            + " output="
+            + repr(holder_output)
+        )
     skip_locked_selected = run_sql(
         client,
         sock,
@@ -368,7 +390,20 @@ def control_core_behavior_probe(client: str, sock: Path, db: str, label: str) ->
            COMMIT;""",
         db,
     ).strip()
-    _hout, herr = holder.communicate(timeout=5)
+    holder.stdin.write("COMMIT;\n")
+    holder.stdin.flush()
+    holder.stdin.close()
+    try:
+        holder.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        holder.terminate()
+        try:
+            holder.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            holder.wait(timeout=2)
+        fail("SKIP LOCKED holder did not exit after COMMIT")
+    herr = holder.stderr.read()
     if holder.returncode != 0:
         fail("SKIP LOCKED holder failed: " + herr.strip())
     if ordered_first != order_job_a:

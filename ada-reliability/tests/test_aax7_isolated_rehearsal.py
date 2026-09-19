@@ -167,8 +167,13 @@ def test_skip_locked_probe_confirms_lock_before_competing_select():
     script = (ROOT / "ada-reliability" / "scripts" / "isolated_mariadb_rehearsal.py").read_text(
         encoding="utf-8"
     )
-    assert "IS_USED_LOCK" in script
-    assert "GET_LOCK" in script
+    assert "LOCK_CONFIRMED:" in script
+    assert "expected_lock_marker" in script
+    assert "select.select" in script
+    assert "stdin=subprocess.PIPE" in script
+    assert "GET_LOCK" not in script
+    assert "IS_USED_LOCK" not in script
+    assert "SELECT SLEEP(2)" not in script
     assert "time.sleep(0.35)" not in script
     assert "lock_deadline = time.monotonic()" in script
     assert '"--no-defaults"' in script
