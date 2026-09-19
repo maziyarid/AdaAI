@@ -1,20 +1,26 @@
-"""AAX-8 Mistral shadow canary: live flag stays false without loopback chat."""
+"""AAX-8 Mistral shadow canary: live flag requires an invoked executor."""
 from __future__ import annotations
 
 import pytest
-from ada_reliability.crypto import hmac_verify
+from ada_reliability.crypto import hmac_sign, hmac_verify, sha256_text
 from ada_reliability.engine import AdaEngine, AdaError, seed_phase1
 from ada_reliability.mistral_shadow_canary import (
+    CANARY_ID,
     CANARY_PROMPT,
     FORBIDDEN_WORKER_ACTIONS,
     MistralShadowCanary,
+    UrllibLoopbackChatTransport,
+    bind_live_from_executor,
     is_live_mistral_participation,
     participation_is_forbidden,
     secret_free_participation,
+    unsigned_worker_receipt,
+    verify_worker_receipt,
 )
 from ada_reliability.shadow_pipeline import unsigned_evidence
 
 HMAC = "phase1-test-hmac-key-must-be-32+"
+WORKER_HMAC = "phase1-worker-hmac-key-must-be-32+"
 
 
 def fresh():
@@ -38,9 +44,26 @@ def live_shaped(**overrides):
         "usage": {"total_tokens": 8},
         "job_created": False,
         "schedule_mutated": False,
+        "canary_id": CANARY_ID,
     }
     base.update(overrides)
     return base
+
+
+class EchoTransport:
+    """Test executor. run() must actually call execute_internal_chat."""
+
+    def __init__(self, payload, mismatch_challenge=False):
+        self.payload = payload
+        self.calls = []
+        self.mismatch_challenge = mismatch_challenge
+
+    def execute_internal_chat(self, prompt, canary_id, challenge):
+        self.calls.append({"prompt": prompt, "canary_id": canary_id, "challenge": challenge})
+        out = dict(self.payload)
+        out["challenge"] = "forged" if self.mismatch_challenge else challenge
+        out["canary_id"] = canary_id
+        return out
 
 
 def test_prompt_forbids_production_routes():
@@ -95,6 +118,21 @@ def test_live_bar_accepts_only_executed_loopback_chat():
     assert is_live_mistral_participation(live_shaped(text="")) is False
 
 
+def test_shape_predicate_is_not_live_without_invoked_transport():
+    shaped = live_shaped(challenge="caller-forged")
+    assert is_live_mistral_participation(shaped) is True
+    assert (
+        bind_live_from_executor(
+            shaped,
+            challenge="caller-forged",
+            transport_invoked=False,
+            worker_hmac_key=None,
+            engine_hmac_key=HMAC,
+        )
+        is False
+    )
+
+
 def test_canary_without_participation_keeps_live_false_and_does_not_mutate():
     e = fresh()
     writes = e.wp.writes
@@ -104,6 +142,8 @@ def test_canary_without_participation_keeps_live_false_and_does_not_mutate():
     assert record["live_mistral_job"] is False
     assert record["mistral_participated"] is False
     assert record["evidence_kind"] == "repository_shadow_canary"
+    assert record["transport_invoked"] is False
+    assert record["caller_participation_trusted"] is False
     assert record["mutated"] is False
     assert record["production_sql"] is False
     assert record["production_mutation"] is False
@@ -113,27 +153,138 @@ def test_canary_without_participation_keeps_live_false_and_does_not_mutate():
     assert hmac_verify(unsigned_evidence(record), record["evidence_hmac"], HMAC)
 
 
-def test_fixture_with_executed_true_is_the_predicate_only_not_a_live_claim_in_docs():
-    """The predicate is unit-tested; pytest is still not a VPS POST.
+def test_caller_supplied_participation_never_mints_live_canary(monkeypatch):
+    """Greptile P1 on 57e0fed: a well-formed dict is not an executor result.
 
-    A well-formed participation object is how the live host will mark
-    executed=True after loopback chat. This test proves the canary
-    record would flip, and that it still does not write.
+    urllib/http/socket fail if called; the dict still must not flip live.
     """
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ordinary Python transport must not be called")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    monkeypatch.setattr("http.client.HTTPConnection", boom)
     e = fresh()
     writes = e.wp.writes
     canary = MistralShadowCanary(e)
-    record = canary.run(participation=live_shaped())
+    record = canary.run(participation=live_shaped(challenge="guess"))
+    assert record["live_mistral_job"] is False
+    assert record["mistral_participated"] is False
+    assert record["evidence_kind"] == "repository_shadow_canary"
+    assert record["transport_invoked"] is False
+    assert record["caller_participation_trusted"] is False
+    assert record["worker_participation"] is None
+    assert e.wp.writes == writes
+    assert hmac_verify(unsigned_evidence(record), record["evidence_hmac"], HMAC)
+
+
+def test_invoked_transport_with_challenge_echo_binds_live_without_wp_write():
+    """Repository binding proof. EchoTransport is not a VPS POST."""
+    e = fresh()
+    writes = e.wp.writes
+    transport = EchoTransport(live_shaped())
+    canary = MistralShadowCanary(e)
+    record = canary.run(transport=transport)
+    assert transport.calls
+    assert transport.calls[0]["prompt"] == CANARY_PROMPT
+    assert transport.calls[0]["canary_id"] == CANARY_ID
+    assert transport.calls[0]["challenge"]
     assert record["live_mistral_job"] is True
     assert record["mistral_participated"] is True
     assert record["evidence_kind"] == "live_mistral_canary"
+    assert record["transport_invoked"] is True
+    assert record["challenge_bound"] is True
+    assert record["executor"] == "EchoTransport"
     part = record["worker_participation"]
     assert part["payload_copied"] is False
     assert part["job_created"] is False
     assert part["text_sha256"]
-    assert "SHADOW_OK" not in str(part)  # body not copied into sealed participation
+    assert "SHADOW_OK" not in str(part)
     assert e.wp.writes == writes
     assert hmac_verify(unsigned_evidence(record), record["evidence_hmac"], HMAC)
+
+
+def test_transport_result_without_matching_challenge_stays_false():
+    e = fresh()
+    transport = EchoTransport(live_shaped(), mismatch_challenge=True)
+    record = MistralShadowCanary(e).run(transport=transport)
+    assert transport.calls
+    assert record["live_mistral_job"] is False
+    assert record["evidence_kind"] == "repository_shadow_canary"
+    assert record["transport_invoked"] is True
+    assert hmac_verify(unsigned_evidence(record), record["evidence_hmac"], HMAC)
+
+
+def test_non_callable_transport_raises():
+    e = fresh()
+    with pytest.raises(AdaError) as exc:
+        MistralShadowCanary(e).run(transport={"executed": True})
+    assert exc.value.code == "CANARY_NO_TRANSPORT"
+
+
+def test_engine_hmac_cannot_stand_in_for_worker_receipt():
+    shaped = live_shaped(challenge="abc", canary_id=CANARY_ID)
+    shaped["text_sha256"] = sha256_text(shaped["text"])
+    shaped["worker_hmac"] = hmac_sign(unsigned_worker_receipt(shaped), HMAC)
+    assert (
+        verify_worker_receipt(
+            shaped,
+            worker_hmac_key=HMAC,
+            challenge="abc",
+            engine_hmac_key=HMAC,
+        )
+        is False
+    )
+    shaped["worker_hmac"] = hmac_sign(unsigned_worker_receipt(shaped), WORKER_HMAC)
+    assert (
+        verify_worker_receipt(
+            shaped,
+            worker_hmac_key=WORKER_HMAC,
+            challenge="abc",
+            engine_hmac_key=HMAC,
+        )
+        is True
+    )
+
+
+def test_worker_hmac_required_when_key_supplied():
+    e = fresh()
+    transport = EchoTransport(live_shaped())
+    record = MistralShadowCanary(e).run(transport=transport, worker_hmac_key=WORKER_HMAC)
+    assert record["live_mistral_job"] is False
+    assert record["evidence_kind"] == "repository_shadow_canary"
+
+
+def test_worker_hmac_on_executor_result_binds_when_key_distinct():
+    class SignedEcho(EchoTransport):
+        def execute_internal_chat(self, prompt, canary_id, challenge):
+            out = super().execute_internal_chat(prompt, canary_id, challenge)
+            out["text_sha256"] = sha256_text(out["text"])
+            out["worker_hmac"] = hmac_sign(unsigned_worker_receipt(out), WORKER_HMAC)
+            return out
+
+    e = fresh()
+    transport = SignedEcho(live_shaped())
+    record = MistralShadowCanary(e).run(transport=transport, worker_hmac_key=WORKER_HMAC)
+    assert record["live_mistral_job"] is True
+    assert record["evidence_kind"] == "live_mistral_canary"
+
+
+def test_flipping_live_flag_breaks_hmac():
+    e = fresh()
+    record = MistralShadowCanary(e).run(participation=live_shaped())
+    assert record["live_mistral_job"] is False
+    tampered = dict(record)
+    tampered["live_mistral_job"] = True
+    tampered["mistral_participated"] = True
+    tampered["evidence_kind"] = "live_mistral_canary"
+    assert hmac_verify(unsigned_evidence(tampered), record["evidence_hmac"], HMAC) is False
+
+
+def test_urllib_transport_targets_only_loopback_chat():
+    t = UrllibLoopbackChatTransport()
+    assert t.url == "http://127.0.0.1:9102/internal/chat"
+    assert "/mcp" not in t.url
 
 
 def test_forbidden_worker_action_raises_and_does_not_mutate():

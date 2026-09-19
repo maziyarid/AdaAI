@@ -1,5 +1,44 @@
 # Phase 1 reliability progress log
 
+## 2026-09-19T10:05Z — Greptile P1 on 57e0fed: live Mistral evidence cannot be a dict
+
+**Fetched HEAD:** `57e0fedc9583f0c8c24221875f5b535961b47c29` (matches origin).
+Greptile independently reviewed that SHA at **3/5** (PR body last-reviewed
+commit is this SHA) with **P1 Security**: `MistralShadowCanary.run()`
+accepted a caller-created `participation` dictionary as proof that
+`/internal/chat` ran, then HMAC-signed `live_mistral_canary` without a
+transport result or worker receipt. Valid. Did not dismiss.
+Reproduction matched: urllib/http patched to fail, well-formed dict
+still minted live evidence on 57e0fed.
+
+### Fix
+- `participation=` never sets `live_mistral_job` / `mistral_participated`.
+- Live bind requires `transport.execute_internal_chat` actually invoked
+  with a per-run challenge the result must echo.
+- Optional worker HMAC must use a key distinct from the canary engine key.
+- `UrllibLoopbackChatTransport` POSTs only loopback `/internal/chat`.
+- HMAC still covers the full record; flipping live flags fails verify.
+
+### Live evidence this session
+- Ada-readonly: `ls /usr/local/bin/ada-inspect` → ENOENT.
+  `ls /opt/maziyar-control-core` present. `readOnly` stayed on.
+  Royadarman not used. AAX-3 AC3 still open.
+- No VPS `POST /internal/chat`. No WP write. No production SQL.
+- CI on `57e0fed`: pytest jobs failed in ~2s (`runner_id` unassigned
+  historically). Do not rewrite app code.
+- Local suite **231 passed**. Critical files unchanged
+  (engine 71704, outbox 40345).
+
+### Not claimed
+- Live `SHOW TABLES`. Production SQL. Merge of PR #2. Live Mistral POST.
+- Greptile 5/5 on this fix (not yet pushed/reviewed).
+- AAX-8 AC1/AC3/AC4 stay OPEN.
+
+### Rule
+Models propose. Deterministic code authorizes. Independent validators prove the live result.
+
+
+
 ## 2026-09-19T09:40Z — backup/checkpoint contract + Mistral loopback canary (not executed)
 
 **Fetched HEAD:** `e529bc4c3cca9171675dafba8645724af4777a3a` (matches origin).

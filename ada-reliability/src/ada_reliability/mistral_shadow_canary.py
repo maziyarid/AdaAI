@@ -12,18 +12,23 @@ exposes:
 
 This module evaluates a proposal through ``ShadowPipeline`` and records
 HMAC-sealed evidence. ``live_mistral_job`` / ``mistral_participated``
-become true **only** when a real loopback ``/internal/chat`` response is
-supplied with ``executed=True``. Fixtures, job_type ``mistral.chat``,
-and MCP tools never count.
+become true **only** when ``run()`` itself invokes a transport's
+``execute_internal_chat`` (or verifies a worker HMAC on that result)
+with a per-run challenge the transport must echo. A caller-created
+``participation`` dictionary is never live proof. Fixtures, job_type
+``mistral.chat``, healthz, and MCP tools never count.
 
 Never enqueue production jobs. Never apply SQL. Never write WordPress
 or Teznevise. Never introduce a second scheduler.
 """
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from typing import Any, Optional
 
-from .crypto import hmac_sign, sha256_text
+from .crypto import hmac_sign, hmac_verify, sha256_text, token
 from .engine import AdaEngine, AdaError
 from .shadow_pipeline import ShadowPipeline, unsigned_evidence
 
@@ -37,6 +42,18 @@ WORKER_LOOPBACK_URL = "http://127.0.0.1:9102/internal/chat"
 WORKER_HEALTHZ_URL = "http://127.0.0.1:9102/healthz"
 ALLOWED_CHAT_PATH = "/internal/chat"
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+WORKER_RECEIPT_FIELDS = (
+    "challenge",
+    "canary_id",
+    "source",
+    "host",
+    "port",
+    "path",
+    "method",
+    "http_status",
+    "model",
+    "text_sha256",
+)
 
 # Live worker actions that mutate control-core or Mistral workflow state.
 FORBIDDEN_WORKER_ACTIONS = frozenset(
@@ -91,10 +108,12 @@ def participation_is_forbidden(participation: Optional[dict[str, Any]]) -> Optio
 
 
 def is_live_mistral_participation(participation: Optional[dict[str, Any]]) -> bool:
-    """True only for an executed loopback /internal/chat response.
+    """Shape predicate for an executed loopback /internal/chat response.
 
-    job_type mistral.chat, healthz, MCP, and fixtures with executed=False
-    never qualify.
+    Not live evidence by itself. ``run()`` must still bind a transport
+    result (or worker HMAC) to a per-run challenge. job_type
+    mistral.chat, healthz, MCP, and fixtures with executed=False never
+    qualify.
     """
     if not isinstance(participation, dict):
         return False
@@ -130,7 +149,7 @@ def secret_free_participation(participation: Optional[dict[str, Any]]) -> Option
     if not isinstance(participation, dict):
         return None
     text = participation.get("text")
-    text_sha = sha256_text(text) if isinstance(text, str) else None
+    text_sha = sha256_text(text) if isinstance(text, str) else participation.get("text_sha256")
     return {
         "source": participation.get("source"),
         "host": participation.get("host"),
@@ -148,7 +167,140 @@ def secret_free_participation(participation: Optional[dict[str, Any]]) -> Option
         "job_created": False,
         "schedule_mutated": False,
         "payload_copied": False,
+        "challenge_bound": bool(participation.get("challenge")),
     }
+
+
+def unsigned_worker_receipt(result: dict[str, Any]) -> dict[str, Any]:
+    text = result.get("text")
+    text_sha = sha256_text(text) if isinstance(text, str) else result.get("text_sha256")
+    body = {k: result.get(k) for k in WORKER_RECEIPT_FIELDS}
+    body["text_sha256"] = text_sha
+    return body
+
+
+def verify_worker_receipt(
+    result: Optional[dict[str, Any]],
+    *,
+    worker_hmac_key: str,
+    challenge: str,
+    engine_hmac_key: str,
+) -> bool:
+    """True only for a worker HMAC distinct from the canary engine key."""
+    if not isinstance(result, dict):
+        return False
+    if not challenge or result.get("challenge") != challenge:
+        return False
+    if result.get("canary_id") != CANARY_ID:
+        return False
+    if not worker_hmac_key or worker_hmac_key == engine_hmac_key:
+        return False
+    sig = result.get("worker_hmac")
+    if not isinstance(sig, str) or not sig:
+        return False
+    try:
+        if not hmac_verify(unsigned_worker_receipt(result), sig, worker_hmac_key):
+            return False
+    except Exception:
+        return False
+    return is_live_mistral_participation(result)
+
+
+def bind_live_from_executor(
+    result: Optional[dict[str, Any]],
+    *,
+    challenge: str,
+    transport_invoked: bool,
+    worker_hmac_key: Optional[str],
+    engine_hmac_key: str,
+) -> bool:
+    """Live only if this run invoked a transport and the result echoes challenge.
+
+    Caller-supplied participation dicts never reach this helper.
+    """
+    if not transport_invoked:
+        return False
+    if not challenge or not isinstance(result, dict):
+        return False
+    if result.get("challenge") != challenge:
+        return False
+    if not is_live_mistral_participation(result):
+        return False
+    if worker_hmac_key:
+        return verify_worker_receipt(
+            result,
+            worker_hmac_key=worker_hmac_key,
+            challenge=challenge,
+            engine_hmac_key=engine_hmac_key,
+        )
+    return True
+
+
+class UrllibLoopbackChatTransport:
+    """Authenticated executor: POST loopback /internal/chat. Never /mcp."""
+
+    url = WORKER_LOOPBACK_URL
+
+    def execute_internal_chat(self, prompt: str, canary_id: str, challenge: str) -> dict[str, Any]:
+        if not challenge or not isinstance(challenge, str):
+            raise AdaError("CANARY_CHALLENGE", "missing challenge")
+        if not prompt or canary_id != CANARY_ID:
+            raise AdaError("CANARY_PROMPT", canary_id)
+        body = json.dumps(
+            {
+                "prompt": prompt,
+                "temperature": 0,
+                "max_tokens": 32,
+                "canary_id": canary_id,
+                "challenge": challenge,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            self.url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        if req.full_url != WORKER_LOOPBACK_URL or req.get_method() != "POST":
+            raise AdaError("CANARY_TRANSPORT_URL", req.full_url)
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                raw = resp.read()
+                status = int(getattr(resp, "status", 200))
+        except urllib.error.URLError as exc:
+            raise AdaError("CANARY_TRANSPORT", str(exc.reason)[:200]) from exc
+        try:
+            parsed = json.loads(raw.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AdaError("CANARY_TRANSPORT", "invalid json") from exc
+        choices = parsed.get("choices") if isinstance(parsed, dict) else None
+        text = ""
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if isinstance(message, dict):
+                text = str(message.get("content") or "")
+        if not text and isinstance(parsed, dict):
+            text = str(parsed.get("text") or parsed.get("content") or "")
+        model = ""
+        if isinstance(parsed, dict):
+            model = str(parsed.get("model") or "")
+        return {
+            "source": "loopback_internal_chat",
+            "host": "127.0.0.1",
+            "port": 9102,
+            "path": ALLOWED_CHAT_PATH,
+            "method": "POST",
+            "http_status": status,
+            "executed": True,
+            "model": model,
+            "text": text,
+            "finish_reason": (parsed.get("finish_reason") if isinstance(parsed, dict) else None),
+            "usage": (parsed.get("usage") if isinstance(parsed, dict) else None),
+            "challenge": challenge,
+            "canary_id": canary_id,
+            "job_created": False,
+            "schedule_mutated": False,
+        }
 
 
 class MistralShadowCanary:
@@ -176,6 +328,8 @@ class MistralShadowCanary:
         site_id: str = "teznevise.ir",
         proposal: Optional[dict[str, Any]] = None,
         participation: Optional[dict[str, Any]] = None,
+        transport: Any = None,
+        worker_hmac_key: Optional[str] = None,
     ) -> dict[str, Any]:
         forbidden = participation_is_forbidden(participation)
         if forbidden:
@@ -189,7 +343,29 @@ class MistralShadowCanary:
             site_id=site_id,
             proposal=proposal or SHADOW_OBSERVE_PROPOSAL,
         )
-        live = is_live_mistral_participation(participation)
+        challenge = token()
+        transport_invoked = False
+        executor_result: Optional[dict[str, Any]] = None
+        if transport is not None:
+            execute = getattr(transport, "execute_internal_chat", None)
+            if not callable(execute):
+                raise AdaError("CANARY_NO_TRANSPORT", type(transport).__name__)
+            raw = execute(CANARY_PROMPT, CANARY_ID, challenge)
+            transport_invoked = True
+            if not isinstance(raw, dict):
+                raise AdaError("CANARY_TRANSPORT", "executor result must be a dict")
+            forbidden_exec = participation_is_forbidden(raw)
+            if forbidden_exec:
+                raise AdaError("CANARY_MUTATION_ROUTE", forbidden_exec)
+            executor_result = raw
+        live = bind_live_from_executor(
+            executor_result,
+            challenge=challenge,
+            transport_invoked=transport_invoked,
+            worker_hmac_key=worker_hmac_key,
+            engine_hmac_key=self.engine.hmac_key,
+        )
+        bound = secret_free_participation(executor_result if live else None)
         parent = trace.get("evidence_hmac")
         record = {k: v for k, v in trace.items() if k != "evidence_hmac"}
         record.update(
@@ -204,7 +380,11 @@ class MistralShadowCanary:
                 "evidence_kind": (
                     "live_mistral_canary" if live else "repository_shadow_canary"
                 ),
-                "worker_participation": secret_free_participation(participation),
+                "worker_participation": bound,
+                "transport_invoked": transport_invoked,
+                "challenge_bound": bool(live),
+                "executor": type(transport).__name__ if transport is not None else None,
+                "caller_participation_trusted": False,
                 "production_sql": False,
                 "production_mutation": False,
                 "mutated": False,
