@@ -1,12 +1,13 @@
 [Unit]
 Description=Check durable portfolio-dispatcher heartbeat
 After=maziyar-portfolio-dispatcher.service
+ConditionPathExists=/srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py
 OnFailure=maziyar-portfolio-dispatcher-recover.service
 
 [Service]
 Type=oneshot
 User=maziyarid
-Group=maziyarid
+Group=maziarid
 ExecStartPre=/usr/bin/test -r /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py
 ExecStart=/usr/bin/python3 /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py --sqlite /srv/maziyar-wp-mcp/state/factory.sqlite3 --max-heartbeat-age 180
 NoNewPrivileges=true
