@@ -61,6 +61,15 @@ def make_db(path: Path, states=("succeeded", "parked")) -> Path:
     return path
 
 
+CATALOG_STABLE_2 = {
+    "pes-cc-42": {
+        "external_stable_id": "agiflow:stable-2",
+        "idempotency_key": "idem-2",
+        "source": "pending_external_sync",
+    }
+}
+
+
 def test_quiescent_plan_preserves_idempotency_and_parked_semantics(tmp_path):
     db = make_db(tmp_path / "factory.sqlite3")
     before = db.read_bytes()
@@ -158,6 +167,7 @@ def test_verified_external_sync_delegation_removes_second_replay_authority(tmp_p
     plan = cutover.build_plan(
         db,
         external_sync_delegations={"stable-2": proof},
+        control_core_catalog=CATALOG_STABLE_2,
     )
     assert plan["cutover_ready_for_approved_maintenance_window"] is True
     assert plan["preconditions"]["missing_durable_job_bindings"] == []
@@ -264,3 +274,51 @@ def test_long_legacy_external_sync_state_is_preserved_losslessly(tmp_path):
     assert row["external_sync_state"] == "agiflow_synced"
     assert len(row["external_sync_state"]) <= 32
     assert row["payload"]["_legacy_pd_outbox"]["external_sync_state"] == long_state
+
+
+def test_delegation_without_control_core_catalog_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-cc-42"},
+        )
+    except cutover.CutoverError as exc:
+        assert "authoritative control-core catalog" in str(exc)
+    else:
+        raise AssertionError("delegation without catalog must keep the recovery obligation")
+
+
+def test_fabricated_control_core_record_id_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-fabricated"},
+            control_core_catalog=CATALOG_STABLE_2,
+        )
+    except cutover.CutoverError as exc:
+        assert "does not contain record" in str(exc)
+    else:
+        raise AssertionError("unlisted control-core record must be refused")
+
+
+def test_catalog_must_bind_exact_stable_id_and_idempotency_key(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    stale = {
+        "pes-cc-42": {
+            "external_stable_id": "agiflow:stable-2",
+            "idempotency_key": "other-key",
+            "source": "pending_external_sync",
+        }
+    }
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-cc-42"},
+            control_core_catalog=stale,
+        )
+    except cutover.CutoverError as exc:
+        assert "exact recovery obligation" in str(exc)
+    else:
+        raise AssertionError("stale catalog binding must be refused")
