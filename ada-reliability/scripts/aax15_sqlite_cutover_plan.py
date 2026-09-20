@@ -33,12 +33,17 @@ CONTROL_CORE_CATALOG_KEY_PATH = Path(
 )
 CONTROL_CORE_CATALOG_MAX_AGE_SECONDS = 900
 CONTROL_CORE_CATALOG_MAX_FUTURE_SKEW_SECONDS = 30
-CONTROL_CORE_DURABLE_STATUSES = {
+CONTROL_CORE_KNOWN_STATUSES = {
     "pending",
     "in_progress",
     "succeeded",
     "conflict",
     "quarantined",
+}
+CONTROL_CORE_DELEGATION_DISCHARGE_STATUSES = {
+    "pending",
+    "in_progress",
+    "succeeded",
 }
 
 OUTBOX_REQUIRED = {
@@ -290,7 +295,7 @@ def _verify_control_core_catalog(
             raise CutoverError(
                 "control-core catalog record id must be independent of the SQLite row: " + rid
             )
-        if status not in CONTROL_CORE_DURABLE_STATUSES:
+        if status not in CONTROL_CORE_KNOWN_STATUSES:
             raise CutoverError(
                 "control-core catalog record has unsupported durable status: " + rid
             )
@@ -509,6 +514,14 @@ def build_plan(
             raise CutoverError(
                 "control-core catalog record does not own the exact recovery obligation for "
                 + stable_id
+            )
+        if record["status"] not in CONTROL_CORE_DELEGATION_DISCHARGE_STATUSES:
+            raise CutoverError(
+                "control-core catalog record status cannot discharge the legacy recovery "
+                "obligation for "
+                + stable_id
+                + ": "
+                + record["status"]
             )
         parsed_delegations[stable_id] = {
             "external_stable_id": external_stable,

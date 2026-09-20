@@ -596,3 +596,35 @@ def test_catalog_key_file_requires_private_permissions(tmp_path):
         assert "must not be group/world accessible" in str(exc)
     else:
         raise AssertionError("world-readable catalog HMAC key must be refused")
+
+
+def test_terminal_catalog_status_cannot_discharge_parked_delivery(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    for status in ("conflict", "quarantined"):
+        catalog = signed_catalog(
+            records={
+                "pes-cc-42": {
+                    **CATALOG_STABLE_2["records"]["pes-cc-42"],
+                    "status": status,
+                }
+            }
+        )
+        # The signed catalog itself is valid and may report terminal control-core states.
+        verified = verified_catalog(catalog)
+        assert verified.records["pes-cc-42"]["status"] == status
+        try:
+            cutover.build_plan(
+                db,
+                external_sync_delegations={
+                    "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+                },
+                verified_control_core_catalog=verified,
+                now_epoch=CATALOG_NOW,
+            )
+        except cutover.CutoverError as exc:
+            assert "cannot discharge the legacy recovery obligation" in str(exc)
+            assert status in str(exc)
+        else:
+            raise AssertionError(
+                "terminal control-core status must not discharge parked legacy replay"
+            )
