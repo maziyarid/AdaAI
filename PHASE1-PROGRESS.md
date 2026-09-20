@@ -1,3 +1,12 @@
+## 2026-09-20 — AAX-15 signed delegation trust boundary
+
+- Exact PR base for this patch: b4fb159c7dd10b47a6156bc92928b909e17d2f16.
+- The caller-supplied control-core catalog is no longer trusted as data. Delegation now requires an HMAC-SHA256 signed, fresh envelope from fixed issuer maziyar-control-core / source pending_external_sync, fixed key ID aax15-control-core-catalog-v1 and the fixed root-owned verification-key path.
+- Catalog lifetime is at most 900 seconds with 30 seconds allowed future skew. Unsigned, wrong-key, wrong-issuer/source, stale, expired, future, malformed or unsupported-state records fail closed.
+- build_plan re-verifies the original signed envelope against the fixed trusted key path before using any record, so a caller-constructed in-memory VerifiedControlCoreCatalog cannot bypass signature validation.
+- The verified handle is derived from the signed envelope and exact record binding; it is not caller-selected.
+- Focused AAX-15 suite: 29 passed. Full reliability suite: 270 passed. No production SQL, migration, runtime switch, merge or deploy.
+
 ## 2026-09-19 — AAX-15 delegated coordination handoff hardening
 
 - Read-only control-core API verification proved that a parked legacy agiflow_sync can already have a durable pending_external_sync owner. Such rows must not be imported as a second executable failed-run replay.

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import importlib.util
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ada-reliability" / "scripts" / "aax15_sqlite_cutover_plan.py"
@@ -61,13 +65,64 @@ def make_db(path: Path, states=("succeeded", "parked")) -> Path:
     return path
 
 
-CATALOG_STABLE_2 = {
-    "pes-cc-42": {
-        "external_stable_id": "agiflow:stable-2",
-        "idempotency_key": "idem-2",
-        "source": "pending_external_sync",
+CATALOG_KEY = b"aax15-control-core-catalog-test-key-0001"
+CATALOG_NOW = 2_000_000_000
+
+
+def signed_catalog(
+    *,
+    records=None,
+    issuer=cutover.CONTROL_CORE_CATALOG_ISSUER,
+    source=cutover.CONTROL_CORE_CATALOG_SOURCE,
+    issued_at=CATALOG_NOW - 60,
+    expires_at=CATALOG_NOW + 300,
+    key_id=cutover.CONTROL_CORE_CATALOG_KEY_ID,
+    signature_alg=cutover.CONTROL_CORE_CATALOG_SIGNATURE_ALG,
+    key=CATALOG_KEY,
+):
+    if records is None:
+        records = {
+            "pes-cc-42": {
+                "external_stable_id": "agiflow:stable-2",
+                "idempotency_key": "idem-2",
+                "status": "pending",
+                "target_service": "agiflow",
+                "entity_type": "task_comment",
+                "operation": "create_task_comment",
+            }
+        }
+    body = {
+        "format": cutover.CONTROL_CORE_CATALOG_FORMAT,
+        "issuer": issuer,
+        "source": source,
+        "issued_at_epoch": issued_at,
+        "expires_at_epoch": expires_at,
+        "key_id": key_id,
+        "signature_alg": signature_alg,
+        "records": records,
     }
-}
+    signature = hmac.new(key, cutover.canonical(body), hashlib.sha256).hexdigest()
+    return {**body, "signature": signature}
+
+
+CATALOG_STABLE_2 = signed_catalog()
+
+
+def verified_catalog(catalog=None, *, key=CATALOG_KEY, now=CATALOG_NOW):
+    return cutover._verify_control_core_catalog(
+        CATALOG_STABLE_2 if catalog is None else catalog,
+        key,
+        now_epoch=now,
+    )
+
+
+
+@pytest.fixture(autouse=True)
+def trusted_catalog_key_path(tmp_path, monkeypatch):
+    key_path = tmp_path / "trusted-control-core-catalog.key"
+    key_path.write_bytes(CATALOG_KEY)
+    key_path.chmod(0o600)
+    monkeypatch.setattr(cutover, "CONTROL_CORE_CATALOG_KEY_PATH", key_path)
 
 
 def test_quiescent_plan_preserves_idempotency_and_parked_semantics(tmp_path):
@@ -167,7 +222,8 @@ def test_verified_external_sync_delegation_removes_second_replay_authority(tmp_p
     plan = cutover.build_plan(
         db,
         external_sync_delegations={"stable-2": proof},
-        control_core_catalog=CATALOG_STABLE_2,
+        verified_control_core_catalog=verified_catalog(),
+        now_epoch=CATALOG_NOW,
     )
     assert plan["cutover_ready_for_approved_maintenance_window"] is True
     assert plan["preconditions"]["missing_durable_job_bindings"] == []
@@ -284,7 +340,7 @@ def test_delegation_without_control_core_catalog_is_refused(tmp_path):
             external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-cc-42"},
         )
     except cutover.CutoverError as exc:
-        assert "authoritative control-core catalog" in str(exc)
+        assert "verified signed control-core catalog" in str(exc)
     else:
         raise AssertionError("delegation without catalog must keep the recovery obligation")
 
@@ -295,7 +351,8 @@ def test_fabricated_control_core_record_id_is_refused(tmp_path):
         cutover.build_plan(
             db,
             external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-fabricated"},
-            control_core_catalog=CATALOG_STABLE_2,
+            verified_control_core_catalog=verified_catalog(),
+            now_epoch=CATALOG_NOW,
         )
     except cutover.CutoverError as exc:
         assert "does not contain record" in str(exc)
@@ -305,20 +362,237 @@ def test_fabricated_control_core_record_id_is_refused(tmp_path):
 
 def test_catalog_must_bind_exact_stable_id_and_idempotency_key(tmp_path):
     db = make_db(tmp_path / "factory.sqlite3")
-    stale = {
-        "pes-cc-42": {
-            "external_stable_id": "agiflow:stable-2",
-            "idempotency_key": "other-key",
-            "source": "pending_external_sync",
+    stale = signed_catalog(
+        records={
+            "pes-cc-42": {
+                "external_stable_id": "agiflow:stable-2",
+                "idempotency_key": "other-key",
+                "status": "pending",
+                "target_service": "agiflow",
+                "entity_type": "task_comment",
+                "operation": "create_task_comment",
+            }
         }
-    }
+    )
     try:
         cutover.build_plan(
             db,
             external_sync_delegations={"stable-2": "agiflow:stable-2|idem-2|pes-cc-42"},
-            control_core_catalog=stale,
+            verified_control_core_catalog=verified_catalog(stale),
+            now_epoch=CATALOG_NOW,
         )
     except cutover.CutoverError as exc:
         assert "exact recovery obligation" in str(exc)
     else:
         raise AssertionError("stale catalog binding must be refused")
+
+
+def test_signed_catalog_without_separate_verification_key_is_refused(tmp_path):
+    try:
+        cutover._verify_control_core_catalog(
+            CATALOG_STABLE_2,
+            None,
+            now_epoch=CATALOG_NOW,
+        )
+    except cutover.CutoverError as exc:
+        assert "verification key is required" in str(exc)
+    else:
+        raise AssertionError("catalog JSON alone must never establish authority")
+
+def test_catalog_with_invalid_hmac_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    forged = dict(CATALOG_STABLE_2)
+    forged["signature"] = "0" * 64
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={
+                "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+            },
+            verified_control_core_catalog=verified_catalog(forged),
+            now_epoch=CATALOG_NOW,
+        )
+    except cutover.CutoverError as exc:
+        assert "HMAC verification failed" in str(exc)
+    else:
+        raise AssertionError("forged catalog signature must be refused")
+
+
+def test_stale_signed_catalog_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    stale = signed_catalog(
+        issued_at=CATALOG_NOW - 901,
+        expires_at=CATALOG_NOW - 1,
+    )
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={
+                "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+            },
+            verified_control_core_catalog=verified_catalog(stale),
+            now_epoch=CATALOG_NOW,
+        )
+    except cutover.CutoverError as exc:
+        assert "stale" in str(exc)
+    else:
+        raise AssertionError("stale signed catalog must be refused")
+
+
+def test_future_signed_catalog_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    future = signed_catalog(
+        issued_at=CATALOG_NOW + 31,
+        expires_at=CATALOG_NOW + 331,
+    )
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={
+                "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+            },
+            verified_control_core_catalog=verified_catalog(future),
+            now_epoch=CATALOG_NOW,
+        )
+    except cutover.CutoverError as exc:
+        assert "materially in the future" in str(exc)
+    else:
+        raise AssertionError("future-issued catalog outside skew must be refused")
+
+
+def test_catalog_wrong_trusted_issuer_or_source_is_refused(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    for catalog in (
+        signed_catalog(issuer="caller"),
+        signed_catalog(source="caller-export"),
+    ):
+        try:
+            cutover.build_plan(
+                db,
+                external_sync_delegations={
+                    "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+                },
+                verified_control_core_catalog=verified_catalog(catalog),
+                now_epoch=CATALOG_NOW,
+            )
+        except cutover.CutoverError as exc:
+            assert "untrusted control-core catalog" in str(exc)
+        else:
+            raise AssertionError("wrong issuer/source must be refused even with valid HMAC")
+
+
+def test_catalog_status_and_record_shape_are_bound_by_signature(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    bad_records = (
+        {"status": "unknown"},
+        {"target_service": "not-agiflow"},
+        {"entity_type": "job"},
+        {"operation": "update_task"},
+    )
+    base = CATALOG_STABLE_2["records"]["pes-cc-42"]
+    for mutation in bad_records:
+        record = {**base, **mutation}
+        catalog = signed_catalog(records={"pes-cc-42": record})
+        try:
+            cutover.build_plan(
+                db,
+                external_sync_delegations={
+                    "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+                },
+                verified_control_core_catalog=verified_catalog(catalog),
+                now_epoch=CATALOG_NOW,
+            )
+        except cutover.CutoverError:
+            pass
+        else:
+            raise AssertionError("invalid signed control-core record shape must fail closed")
+
+
+def test_verified_handle_is_derived_from_signed_catalog_not_caller_input(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    plan = cutover.build_plan(
+        db,
+        external_sync_delegations={
+            "stable-2": "agiflow:stable-2|idem-2|pes-cc-42"
+        },
+        verified_control_core_catalog=verified_catalog(),
+        now_epoch=CATALOG_NOW,
+    )
+    handles = plan["preconditions"]["delegated_control_core_verified_handles"]
+    assert list(handles) == ["stable-2"]
+    assert len(handles["stable-2"]) == 64
+    int(handles["stable-2"], 16)
+    assert handles["stable-2"] not in {
+        "stable-2",
+        "idem-2",
+        "pes-cc-42",
+        "agiflow:stable-2",
+    }
+
+
+def test_untrusted_catalog_key_id_is_refused(tmp_path):
+    bad = signed_catalog(key_id="caller-selected-key")
+    try:
+        verified_catalog(bad)
+    except cutover.CutoverError as exc:
+        assert "untrusted control-core catalog key_id" in str(exc)
+    else:
+        raise AssertionError("caller-selected catalog key id must be refused")
+
+
+def test_manually_constructed_verified_object_is_reverified_fail_closed(tmp_path):
+    db = make_db(tmp_path / "factory.sqlite3")
+    trusted = verified_catalog()
+    forged_records = {
+        "pes-fake-42": {
+            **trusted.records["pes-cc-42"],
+            "verified_handle": "f" * 64,
+        }
+    }
+    forged = cutover.VerifiedControlCoreCatalog(
+        envelope=trusted.envelope,
+        records=forged_records,
+        key_id=trusted.key_id,
+        issued_at_epoch=trusted.issued_at_epoch,
+        expires_at_epoch=trusted.expires_at_epoch,
+        signature=trusted.signature,
+    )
+    try:
+        cutover.build_plan(
+            db,
+            external_sync_delegations={
+                "stable-2": "agiflow:stable-2|idem-2|pes-fake-42"
+            },
+            verified_control_core_catalog=forged,
+            now_epoch=CATALOG_NOW,
+        )
+    except cutover.CutoverError as exc:
+        assert "does not contain record" in str(exc)
+    else:
+        raise AssertionError("constructed verified object must not bypass signed envelope")
+
+
+def test_trusted_catalog_loader_uses_fixed_key_path(tmp_path):
+    catalog_path = tmp_path / "catalog.json"
+    import json
+    catalog_path.write_text(json.dumps(CATALOG_STABLE_2), encoding="utf-8")
+    verified = cutover.load_trusted_control_core_catalog(
+        catalog_path,
+        now_epoch=CATALOG_NOW,
+    )
+    assert verified.key_id == cutover.CONTROL_CORE_CATALOG_KEY_ID
+    assert verified.records["pes-cc-42"]["verified_handle"]
+
+
+def test_catalog_key_file_requires_private_permissions(tmp_path):
+    key_file = tmp_path / "catalog.key"
+    key_file.write_bytes(CATALOG_KEY)
+    key_file.chmod(0o600)
+    assert cutover.load_catalog_verification_key(key_file) == CATALOG_KEY
+    key_file.chmod(0o644)
+    try:
+        cutover.load_catalog_verification_key(key_file)
+    except cutover.CutoverError as exc:
+        assert "must not be group/world accessible" in str(exc)
+    else:
+        raise AssertionError("world-readable catalog HMAC key must be refused")

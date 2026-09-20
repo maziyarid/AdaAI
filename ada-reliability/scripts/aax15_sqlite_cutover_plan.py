@@ -10,17 +10,36 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import sqlite3
+import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 SAFE_TERMINAL = {"succeeded", "dead_letter"}
 SAFE_PARKED = {"parked"}
 UNSAFE_ACTIVE = {"queued", "retryable", "inflight"}
 KNOWN = SAFE_TERMINAL | SAFE_PARKED | UNSAFE_ACTIVE
 NAMESPACE = uuid.UUID("151ff1b8-a238-4bb7-91fb-8e4e10f88a15")
+CONTROL_CORE_CATALOG_FORMAT = "ada-control-core-external-sync-catalog-v1"
+CONTROL_CORE_CATALOG_ISSUER = "maziyar-control-core"
+CONTROL_CORE_CATALOG_SOURCE = "pending_external_sync"
+CONTROL_CORE_CATALOG_SIGNATURE_ALG = "hmac-sha256"
+CONTROL_CORE_CATALOG_KEY_ID = "aax15-control-core-catalog-v1"
+CONTROL_CORE_CATALOG_KEY_PATH = Path(
+    "/etc/maziyar-control-core/aax15-external-sync-catalog.key"
+)
+CONTROL_CORE_CATALOG_MAX_AGE_SECONDS = 900
+CONTROL_CORE_CATALOG_MAX_FUTURE_SKEW_SECONDS = 30
+CONTROL_CORE_DURABLE_STATUSES = {
+    "pending",
+    "in_progress",
+    "succeeded",
+    "conflict",
+    "quarantined",
+}
 
 OUTBOX_REQUIRED = {
     "stable_id", "idempotency_key", "worker", "run_id", "event_type", "state",
@@ -37,6 +56,16 @@ RUN_REQUIRED = {
 
 class CutoverError(RuntimeError):
     pass
+
+
+class VerifiedControlCoreCatalog(NamedTuple):
+    envelope: dict[str, Any]
+    records: dict[str, dict[str, Any]]
+    key_id: str
+    issued_at_epoch: int
+    expires_at_epoch: int
+    signature: str
+
 
 
 def canonical(obj: Any) -> bytes:
@@ -145,25 +174,113 @@ def map_outbox_row(
     }
 
 
-def load_control_core_catalog(catalog: dict[str, Any] | None) -> dict[str, dict[str, str]]:
-    """Independent control-core ownership map.
+def _verify_control_core_catalog(
+    catalog: dict[str, Any] | None,
+    verification_key: bytes | None,
+    *,
+    now_epoch: float | None = None,
+) -> VerifiedControlCoreCatalog:
+    """Verify a fresh, trusted control-core external-sync catalog.
 
-    Keys are control-core record ids. Values must bind the same external
-    stable id and legacy idempotency key that the SQLite row carries.
-    Caller-supplied proof text is not authority by itself.
+    The catalog JSON is not authority by itself. Its HMAC verification key is
+    supplied through a separate trust channel and is never embedded in the
+    catalog. Only a correctly signed, fresh envelope from the expected
+    issuer/source can discharge a legacy replay obligation.
     """
     if not catalog:
-        return {}
-    loaded: dict[str, dict[str, str]] = {}
-    for record_id, raw in catalog.items():
+        raise CutoverError("control-core signed catalog is required")
+    if not verification_key:
+        raise CutoverError(
+            "control-core catalog verification key is required; unsigned catalog is not authority"
+        )
+    if len(verification_key) < 32:
+        raise CutoverError("control-core catalog verification key must be at least 32 bytes")
+    if not isinstance(catalog, dict):
+        raise CutoverError("control-core catalog must be a JSON object")
+
+    required = {
+        "format",
+        "issuer",
+        "source",
+        "issued_at_epoch",
+        "expires_at_epoch",
+        "key_id",
+        "signature_alg",
+        "records",
+        "signature",
+    }
+    missing = sorted(required - set(catalog))
+    if missing:
+        raise CutoverError(
+            "control-core catalog missing signed envelope field(s): " + ",".join(missing)
+        )
+
+    if str(catalog.get("format") or "") != CONTROL_CORE_CATALOG_FORMAT:
+        raise CutoverError("unsupported control-core catalog format")
+    if str(catalog.get("issuer") or "") != CONTROL_CORE_CATALOG_ISSUER:
+        raise CutoverError("untrusted control-core catalog issuer")
+    if str(catalog.get("source") or "") != CONTROL_CORE_CATALOG_SOURCE:
+        raise CutoverError("untrusted control-core catalog source")
+    if str(catalog.get("signature_alg") or "") != CONTROL_CORE_CATALOG_SIGNATURE_ALG:
+        raise CutoverError("unsupported control-core catalog signature algorithm")
+    key_id = str(catalog.get("key_id") or "").strip()
+    if key_id != CONTROL_CORE_CATALOG_KEY_ID:
+        raise CutoverError("untrusted control-core catalog key_id")
+
+    try:
+        issued_at = int(catalog["issued_at_epoch"])
+        expires_at = int(catalog["expires_at_epoch"])
+    except (TypeError, ValueError):
+        raise CutoverError("control-core catalog timestamps must be integer epoch seconds")
+
+    now = int(time.time() if now_epoch is None else now_epoch)
+    if issued_at > now + CONTROL_CORE_CATALOG_MAX_FUTURE_SKEW_SECONDS:
+        raise CutoverError("control-core catalog issued_at is materially in the future")
+    if expires_at <= issued_at:
+        raise CutoverError("control-core catalog expiry must be after issuance")
+    if expires_at - issued_at > CONTROL_CORE_CATALOG_MAX_AGE_SECONDS:
+        raise CutoverError("control-core catalog validity window exceeds 15 minutes")
+    if now - issued_at > CONTROL_CORE_CATALOG_MAX_AGE_SECONDS:
+        raise CutoverError("control-core catalog is stale")
+    if now > expires_at:
+        raise CutoverError("control-core catalog is expired")
+
+    signature = str(catalog.get("signature") or "").strip().lower()
+    if len(signature) != 64:
+        raise CutoverError("control-core catalog signature must be a SHA-256 hex digest")
+    try:
+        bytes.fromhex(signature)
+    except ValueError:
+        raise CutoverError("control-core catalog signature is not valid hex")
+
+    signed_body = {k: v for k, v in catalog.items() if k != "signature"}
+    expected = hmac.new(
+        verification_key,
+        canonical(signed_body),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise CutoverError("control-core catalog HMAC verification failed")
+
+    records = catalog.get("records")
+    if not isinstance(records, dict):
+        raise CutoverError("control-core catalog records must be an object")
+
+    loaded: dict[str, dict[str, Any]] = {}
+    for record_id, raw in records.items():
         rid = str(record_id).strip()
         if not rid:
             raise CutoverError("control-core catalog contains an empty record id")
         if not isinstance(raw, dict):
             raise CutoverError("control-core catalog record must be an object: " + rid)
+
         external = str(raw.get("external_stable_id") or "").strip()
         idem = str(raw.get("idempotency_key") or "").strip()
-        source = str(raw.get("source") or "control-core").strip() or "control-core"
+        status = str(raw.get("status") or "").strip()
+        target_service = str(raw.get("target_service") or "").strip()
+        entity_type = str(raw.get("entity_type") or "").strip()
+        operation = str(raw.get("operation") or "").strip()
+
         if not external or not idem:
             raise CutoverError(
                 "control-core catalog record must bind external_stable_id and idempotency_key: "
@@ -173,19 +290,92 @@ def load_control_core_catalog(catalog: dict[str, Any] | None) -> dict[str, dict[
             raise CutoverError(
                 "control-core catalog record id must be independent of the SQLite row: " + rid
             )
+        if status not in CONTROL_CORE_DURABLE_STATUSES:
+            raise CutoverError(
+                "control-core catalog record has unsupported durable status: " + rid
+            )
+        if target_service != "agiflow":
+            raise CutoverError("control-core catalog record target_service mismatch: " + rid)
+        if entity_type != "task_comment":
+            raise CutoverError("control-core catalog record entity_type mismatch: " + rid)
+        if operation != "create_task_comment":
+            raise CutoverError("control-core catalog record operation mismatch: " + rid)
+
+        handle_body = {
+            "catalog_format": CONTROL_CORE_CATALOG_FORMAT,
+            "issuer": CONTROL_CORE_CATALOG_ISSUER,
+            "source": CONTROL_CORE_CATALOG_SOURCE,
+            "key_id": key_id,
+            "issued_at_epoch": issued_at,
+            "expires_at_epoch": expires_at,
+            "catalog_signature": signature,
+            "record_id": rid,
+            "external_stable_id": external,
+            "idempotency_key": idem,
+            "status": status,
+            "target_service": target_service,
+            "entity_type": entity_type,
+            "operation": operation,
+        }
         loaded[rid] = {
             "external_stable_id": external,
             "idempotency_key": idem,
-            "source": source,
+            "status": status,
+            "target_service": target_service,
+            "entity_type": entity_type,
+            "operation": operation,
+            "source": CONTROL_CORE_CATALOG_SOURCE,
+            "issuer": CONTROL_CORE_CATALOG_ISSUER,
+            "key_id": key_id,
+            "issued_at_epoch": issued_at,
+            "expires_at_epoch": expires_at,
+            "verified_handle": hashlib.sha256(canonical(handle_body)).hexdigest(),
         }
-    return loaded
+    return VerifiedControlCoreCatalog(
+        envelope=json.loads(json.dumps(catalog)),
+        records=loaded,
+        key_id=key_id,
+        issued_at_epoch=issued_at,
+        expires_at_epoch=expires_at,
+        signature=signature,
+    )
+
+
+def load_catalog_verification_key(path: Path = CONTROL_CORE_CATALOG_KEY_PATH) -> bytes:
+    if not path.is_file():
+        raise CutoverError("control-core catalog HMAC key file not found")
+    stat_result = path.stat()
+    if stat_result.st_uid != 0:
+        raise CutoverError("control-core catalog HMAC key file must be root-owned")
+    mode = stat_result.st_mode & 0o777
+    if mode & 0o077:
+        raise CutoverError(
+            "control-core catalog HMAC key file must not be group/world accessible"
+        )
+    key = path.read_bytes().strip()
+    if len(key) < 32:
+        raise CutoverError("control-core catalog HMAC key file must contain at least 32 bytes")
+    return key
+
+
+def load_trusted_control_core_catalog(
+    path: Path,
+    *,
+    now_epoch: float | None = None,
+) -> VerifiedControlCoreCatalog:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise CutoverError("--control-core-catalog must be a JSON object")
+    key = load_catalog_verification_key(CONTROL_CORE_CATALOG_KEY_PATH)
+    return _verify_control_core_catalog(raw, key, now_epoch=now_epoch)
 
 
 def build_plan(
     sqlite_path: Path,
     job_bindings: dict[str, str] | None = None,
     external_sync_delegations: dict[str, str] | None = None,
-    control_core_catalog: dict[str, Any] | None = None,
+    verified_control_core_catalog: VerifiedControlCoreCatalog | None = None,
+    now_epoch: float | None = None,
 ) -> dict:
     if not sqlite_path.is_file():
         raise CutoverError(f"SQLite source not found: {sqlite_path}")
@@ -255,7 +445,18 @@ def build_plan(
         )
 
     by_stable = {str(r["stable_id"]): r for r in outbox}
-    parsed_delegations: dict[str, dict[str, str]] = {}
+    trusted_catalog: VerifiedControlCoreCatalog | None = None
+    if verified_control_core_catalog is not None:
+        trusted_key = load_catalog_verification_key(CONTROL_CORE_CATALOG_KEY_PATH)
+        trusted_catalog = _verify_control_core_catalog(
+            verified_control_core_catalog.envelope,
+            trusted_key,
+            now_epoch=now_epoch,
+        )
+        if trusted_catalog.signature != verified_control_core_catalog.signature:
+            raise CutoverError("control-core catalog verified object signature mismatch")
+    catalog = trusted_catalog.records if trusted_catalog is not None else {}
+    parsed_delegations: dict[str, dict[str, Any]] = {}
     for stable_id, proof in external_sync_delegations.items():
         row = by_stable[stable_id]
         if str(row.get("event_type") or "") != "agiflow_sync":
@@ -291,10 +492,9 @@ def build_plan(
                 "external-sync delegation control-core record must be independent of the SQLite row: "
                 + stable_id
             )
-        catalog = load_control_core_catalog(control_core_catalog)
         if not catalog:
             raise CutoverError(
-                "external-sync delegation requires an authoritative control-core catalog "
+                "external-sync delegation requires a verified signed control-core catalog "
                 "bound to the legacy idempotency key for " + stable_id
             )
         record = catalog.get(control_core_record_id)
@@ -315,6 +515,10 @@ def build_plan(
             "idempotency_key": proof_idem,
             "control_core_record_id": control_core_record_id,
             "catalog_source": record["source"],
+            "catalog_issuer": record["issuer"],
+            "catalog_key_id": record["key_id"],
+            "catalog_status": record["status"],
+            "verified_handle": record["verified_handle"],
         }
 
     for row in outbox:
@@ -371,6 +575,22 @@ def build_plan(
                 sid: parsed_delegations[sid]["control_core_record_id"]
                 for sid in sorted(parsed_delegations)
             },
+            "delegated_control_core_verified_handles": {
+                sid: parsed_delegations[sid]["verified_handle"]
+                for sid in sorted(parsed_delegations)
+            },
+            "control_core_catalog_trust": (
+                {
+                    "key_id": trusted_catalog.key_id,
+                    "issued_at_epoch": trusted_catalog.issued_at_epoch,
+                    "expires_at_epoch": trusted_catalog.expires_at_epoch,
+                    "signature_sha256": hashlib.sha256(
+                        trusted_catalog.signature.encode("ascii")
+                    ).hexdigest(),
+                }
+                if trusted_catalog is not None
+                else None
+            ),
         },
         "target": {
             "migration": "006_ada_failed_run_outbox.sql",
@@ -405,7 +625,7 @@ def main() -> int:
     ap.add_argument(
         "--control-core-catalog",
         type=Path,
-        help="JSON map of control-core record_id -> {external_stable_id, idempotency_key, source}",
+        help="HMAC-signed fresh control-core pending_external_sync catalog envelope",
     )
     args = ap.parse_args()
     bindings: dict[str, str] = {}
@@ -429,13 +649,17 @@ def main() -> int:
             if stable_id in delegations and delegations[stable_id] != external_stable:
                 raise CutoverError("conflicting --external-sync-delegation for " + stable_id)
             delegations[stable_id] = external_stable
-        catalog = None
+        verified_catalog = None
         if args.control_core_catalog is not None:
-            raw_catalog = json.loads(args.control_core_catalog.read_text(encoding="utf-8"))
-            if not isinstance(raw_catalog, dict):
-                raise CutoverError("--control-core-catalog must be a JSON object")
-            catalog = raw_catalog
-        plan = build_plan(args.sqlite, bindings, delegations, control_core_catalog=catalog)
+            verified_catalog = load_trusted_control_core_catalog(
+                args.control_core_catalog
+            )
+        plan = build_plan(
+            args.sqlite,
+            bindings,
+            delegations,
+            verified_control_core_catalog=verified_catalog,
+        )
     except (CutoverError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
