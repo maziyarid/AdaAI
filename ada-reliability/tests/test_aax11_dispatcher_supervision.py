@@ -111,6 +111,10 @@ def test_staged_service_forces_observation_only_and_rate_limits_restart():
     assert "Restart=on-failure" in service
     assert "StartLimitBurst=3" in service
     assert "OnFailure=maziyar-portfolio-dispatcher-recover.service" in watchdog_unit
+    assert "ExecStartPre=/usr/bin/test -r /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py" in watchdog_unit
+    assert "/usr/bin/python3 /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py" in watchdog_unit
+    assert "/srv/maziyar-ai-src/AdaAI/ops/portfolio-dispatcher" not in watchdog_unit
+    assert "ReadOnlyPaths=/srv/maziyar-wp-mcp/state /srv/maziyar-wp-mcp/deploy" in watchdog_unit
     assert "--max-heartbeat-age 180" in watchdog_unit
     assert "OnUnitActiveSec=2min" in timer
     assert "StartLimitIntervalSec=3600" in recovery

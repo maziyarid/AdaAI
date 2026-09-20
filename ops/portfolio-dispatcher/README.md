@@ -19,6 +19,20 @@ replacement/retirement gates and explicit human approval.
 
 Do not enable or start these units merely because they exist in the repository.
 
+
+## Installation layout
+
+The unit files must not execute helper code directly from a git checkout. Before
+an approved service install, copy the reviewed watchdog to the stable runtime
+path:
+
+    install -o maziyarid -g maziyarid -m 0644       ops/portfolio-dispatcher/portfolio_dispatcher_watchdog.py       /srv/maziyar-wp-mcp/deploy/portfolio_dispatcher_watchdog.py
+
+The watchdog unit has an ExecStartPre read check and executes only that runtime
+copy. This prevents service health from depending on which Ada git worktree is
+currently checked out. Copying/installing the file or units is a production
+deployment action and is not performed by repository tests.
+
 ## Pre-deploy validation
 
 Run the focused pytest file and systemd-analyze verify over all four staged
