@@ -1,0 +1,38 @@
+[Unit]
+Description=Ada to Ms Robot Durable Event Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=msrobotbridge
+Group=msrobot-bridge
+WorkingDirectory=/srv/ms-robot-bridge
+Environment=MSROBOT_BRIDGE_HOST=127.0.0.1
+Environment=MSROBOT_BRIDGE_PORT=9110
+Environment=MSROBOT_BRIDGE_STATE=/var/lib/ms-robot-bridge
+EnvironmentFile=/etc/ms-robot-bridge.env
+ExecStart=/usr/bin/python3 /srv/ms-robot-bridge/bridge.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ms-robot-bridge
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=96M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

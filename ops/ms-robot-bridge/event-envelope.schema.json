@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ms-robot.local/schemas/event-envelope-v1.json",
+  "title": "Ada ↔ Ms Robot Event Envelope v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "idempotency_key",
+    "source",
+    "target",
+    "event_type",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "target": {
+      "enum": [
+        "ada",
+        "ms_robot",
+        "agiflow",
+        "telegram",
+        "analytics"
+      ]
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "site_key": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "project_key": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "sensitivity": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}
