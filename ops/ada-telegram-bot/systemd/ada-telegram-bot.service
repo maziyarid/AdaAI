@@ -1,0 +1,45 @@
+[Unit]
+Description=Ada Telegram Bot Bridge
+Documentation=file:/opt/ada-telegram-bot/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=adabot
+Group=adabot
+UMask=0077
+EnvironmentFile=/etc/ada-telegram-bot.env
+ExecCondition=/usr/bin/python3 /opt/ada-telegram-bot/check_config.py
+ExecStart=/usr/bin/python3 /opt/ada-telegram-bot/bot.py
+WorkingDirectory=/opt/ada-telegram-bot
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ada-telegram-bot
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=128M
+TasksMax=32
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

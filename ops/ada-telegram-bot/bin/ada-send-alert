@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$(id -u)" -eq 0 ]; then
+  exec /usr/sbin/runuser -u adabot -- /usr/bin/python3 /opt/ada-telegram-bot/send_alert.py "$@"
+fi
+exec /usr/bin/python3 /opt/ada-telegram-bot/send_alert.py "$@"
