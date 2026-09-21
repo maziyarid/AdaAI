@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic durable heartbeat check for portfolio dispatcher
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+Unit=maziyar-portfolio-dispatcher-watchdog.service
+
+[Install]
+WantedBy=timers.target

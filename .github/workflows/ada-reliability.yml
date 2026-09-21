@@ -1,0 +1,30 @@
+name: ada-reliability
+
+on:
+  pull_request:
+  push:
+    branches: [phase1/reliability-layer, main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ada-reliability
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Refuse placeholders
+        run: |
+          ! grep -q PLACEHOLDER_WILL_BE_REPLACED src/ada_reliability/engine.py
+          ! grep -q PLACEHOLDER_LOAD_FROM_LOCAL tests/test_phase1_contracts.py
+      - name: Install
+        run: pip install pytest
+      - name: Import package
+        env:
+          PYTHONPATH: src
+        run: python -c "from ada_reliability import AdaEngine, seed_phase1; print('ok', AdaEngine, seed_phase1)"
+      - name: Pytest
+        run: python -m pytest -q

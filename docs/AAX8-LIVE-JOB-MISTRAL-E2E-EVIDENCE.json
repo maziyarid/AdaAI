@@ -1,0 +1,51 @@
+{
+  "captured_date": "2026-09-19",
+  "repo_head": "5866888ed79fc419b054c9af0313193aa8a27b1c",
+  "greptile_parent_review": {
+    "status": "completed",
+    "conclusion": "success",
+    "comments_added": 0
+  },
+  "source": "live_control_core_job + loopback_internal_chat + ShadowPipeline",
+  "source_job": {
+    "id": "8a901775-30a0-4604-bd19-ed0c9e8dca16",
+    "stable_id": "job:schedule:schedule:seo-scout:497170",
+    "job_type": "seo_scout.run",
+    "status": "succeeded"
+  },
+  "task_context_sha256": "b5b297795682b5628ca6ff7cc44f88049d884c3aca20bcecd61048ac9bf9abb5",
+  "payload_copied_to_evidence": false,
+  "mistral": {
+    "endpoint": "http://127.0.0.1:9102/internal/chat",
+    "http_status": 200,
+    "model": "mistral-small-latest",
+    "response_sha256": "bc9e3978101f716a0c530eb1828e8a01cb86cf81fe6c9165cfc7bb3f84d46c7f"
+  },
+  "proposal": {
+    "sha256": "d14c11a430809d336c46b2881cb83c566d1d1b4476f8be7c0495a4ab2dc2227c",
+    "used_by_ada": true,
+    "tool": "wp_update_metadata",
+    "mutation_type": "METADATA_UPDATE",
+    "resource_id": "42"
+  },
+  "live_job_bound": true,
+  "trace_evidence_verified": true,
+  "postcondition_evidence_verified": true,
+  "rollback_evidence_verified": true,
+  "authorization_decision": "ALLOW",
+  "postcondition_proven": false,
+  "task_completed": false,
+  "rollback_executed": false,
+  "wp_writes_before": 0,
+  "wp_writes_after": 0,
+  "journal_changed": false,
+  "production_sql": false,
+  "production_mutation": false,
+  "job_enqueued": false,
+  "schedule_mutated": false,
+  "notes": [
+    "The live control-core job payload was consumed in-memory by the Mistral prompt but is not stored in evidence.",
+    "ALLOW is an authorization result inside SHADOW mode; no mutation path was invoked.",
+    "postcondition_proven=false is expected because the proposal was deliberately not applied."
+  ]
+}

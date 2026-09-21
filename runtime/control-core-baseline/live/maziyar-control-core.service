@@ -1,0 +1,35 @@
+[Unit]
+Description=Maziyar durable control core and local scheduler
+After=network-online.target mariadb.service
+Wants=network-online.target
+Requires=mariadb.service
+
+[Service]
+Type=simple
+User=mazcontrol
+Group=mazcontrol
+WorkingDirectory=/opt/maziyar-control-core
+EnvironmentFile=/etc/maziyar-control-core.env
+ExecStart=/opt/maziyar-control-core/venv/bin/python /opt/maziyar-control-core/control_core.py serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/opt/maziyar-control-core/state
+
+[Install]
+WantedBy=multi-user.target

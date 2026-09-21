@@ -1,0 +1,50 @@
+{
+  "schema": "ada.qalam.release/v1",
+  "status": "canonical",
+  "authoritative_runtime": "Ada Context Core",
+  "note": "This file is the single runtime release pointer. Docs, evals, workers and receipts must derive current versions from it. Do not hard-code a current Qalam/Bible version elsewhere.",
+  "components": {
+    "qalam-router": {
+      "version": "1.1.0",
+      "path": "skills/qalam/router/SKILL.md",
+      "role": "router"
+    },
+    "art-of-writing-bible": {
+      "version": "2.0.0",
+      "path": "skills/art-of-writing-bible/SKILL.md",
+      "role": "bible"
+    },
+    "art-of-writing-bible-evals": {
+      "version": "1.3.0",
+      "path": "skills/art-of-writing-bible/evals/evals.json",
+      "role": "eval-pack",
+      "validates": "art-of-writing-bible@2.0.0",
+      "note": "Eval pack version is independent of the Bible version. 1.3.0 validates Bible 2.0.0; do not rename the pack to 2.0.0."
+    },
+    "persian-medical-human-writing": {
+      "version": "1.0.0",
+      "path": "skills/persian-medical-human-writing/SKILL.md",
+      "role": "domain-overlay"
+    }
+  },
+  "overlays": {
+    "ux-writing-fa-ir": "skills/qalam/fa-ir-overlays/ux-writing-fa-ir.md",
+    "tool-routing": "skills/qalam/fa-ir-overlays/tool-routing.md",
+    "fa-ir-product-lexicon": "skills/qalam/fa-ir-overlays/fa-ir-product-lexicon.md"
+  },
+  "loading": {
+    "rule": "Load router + Bible for every writing task. Then load EVERY overlay listed for the selected profile. 'Load only the needed overlay' forbids unrelated profiles; it does not authorize skipping Bible companions or listed profile overlays.",
+    "bible_companions": [
+      "skills/art-of-writing-bible/references/register-atlas.md",
+      "skills/art-of-writing-bible/references/iranian-dari.md",
+      "skills/art-of-writing-bible/references/finding-index.md",
+      "skills/art-of-writing-bible/references/landing-product-ux.md",
+      "skills/art-of-writing-bible/references/pattern-bank.md",
+      "skills/art-of-writing-bible/references/philosophycaf-corpus.md",
+      "skills/art-of-writing-bible/references/overlays.md"
+    ]
+  },
+  "legacy_labels": {
+    "1.4.0": "Historical docs/router integration label from 2026-09-15. Not the current router (1.1.0) and not the current Bible (2.0.0). Do not treat 1.4.0 as current."
+  }
+}

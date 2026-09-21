@@ -1,0 +1,26 @@
+# Least-privilege Ada inspection. Install only after human review.
+# /etc/sudoers.d/ada-inspect
+#
+# mistralops (Grok Ada-readonly SSH) may run the helper as mazcontrol.
+# mazcontrol can read /etc/maziyar-control-core.env (0640 root:mazcontrol).
+# This is NOT a root shell, NOT service control, NOT arbitrary mysql.
+#
+# visudo -c -f /etc/sudoers.d/ada-inspect before enabling.
+
+Defaults:mistralops !requiretty
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect help
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect units
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect hashes
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect tables
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect schema
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect create *
+mistralops ALL=(mazcontrol) NOPASSWD: /usr/local/bin/ada-inspect columns *
+
+# Explicitly absent:
+#   (root) ALL
+#   systemctl start/stop/restart
+#   mysql
+#   /bin/sh
+#   visudo
+#   cat /etc/maziyar-control-core.env
