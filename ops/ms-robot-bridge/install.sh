@@ -21,6 +21,18 @@ install -o root -g msrobot-bridge -m 0640 "$SRC/README.md" "$DEST/README.md"
 install -o root -g root -m 0644 "$SRC/systemd/ms-robot-bridge.service" /etc/systemd/system/ms-robot-bridge.service
 systemctl daemon-reload
 systemctl restart ms-robot-bridge.service
-curl -fsS --max-time 5 http://127.0.0.1:9110/healthz
+ok=0
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 2 http://127.0.0.1:9110/healthz >/tmp/ms-robot-bridge-health.json 2>/dev/null; then
+    ok=1
+    break
+  fi
+  sleep 0.2
+done
+if [ "$ok" -ne 1 ]; then
+  systemctl status ms-robot-bridge.service --no-pager -l || true
+  exit 1
+fi
+cat /tmp/ms-robot-bridge-health.json
 echo
 echo "Rollback backup: $BACKUP"
