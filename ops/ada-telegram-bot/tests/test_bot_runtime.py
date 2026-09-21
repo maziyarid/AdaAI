@@ -12,7 +12,7 @@ class BotRuntimeTests(unittest.TestCase):
         os.environ["STATE_DIR"]=str(self.state)
         os.environ["TELEGRAM_BOT_TOKEN"]=""
         os.environ["TELEGRAM_PAIR_CODE"]="test-pair-code"
-        os.environ["ADA_QALAM_RELEASE"]=str(HERE/"qalam-release.json")
+        os.environ["ADA_QALAM_RELEASE"]=str(HERE.parents[1]/"skills/qalam/RELEASE.json")
         spec=importlib.util.spec_from_file_location("ada_bot_test",BOT)
         self.bot=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.bot)
