@@ -123,6 +123,16 @@ def trusted_catalog_key_path(tmp_path, monkeypatch):
     key_path.write_bytes(CATALOG_KEY)
     key_path.chmod(0o600)
     monkeypatch.setattr(cutover, "CONTROL_CORE_CATALOG_KEY_PATH", key_path)
+    # Test trust metadata independently of the account running pytest. Do not
+    # require root test execution or relax the production key loader.
+    from types import SimpleNamespace
+    original_stat = Path.stat
+    def fixture_stat(path, *args, **kwargs):
+        actual = original_stat(path, *args, **kwargs)
+        if path.parent == tmp_path and path.name in {"trusted-control-core-catalog.key", "catalog.key"}:
+            return SimpleNamespace(st_uid=0, st_mode=actual.st_mode)
+        return actual
+    monkeypatch.setattr(Path, "stat", fixture_stat)
 
 
 def test_quiescent_plan_preserves_idempotency_and_parked_semantics(tmp_path):
@@ -628,3 +638,19 @@ def test_terminal_catalog_status_cannot_discharge_parked_delivery(tmp_path):
             raise AssertionError(
                 "terminal control-core status must not discharge parked legacy replay"
             )
+
+
+def test_catalog_key_file_requires_root_owner(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    key_file = tmp_path / "catalog.key"
+    key_file.write_bytes(CATALOG_KEY)
+    key_file.chmod(0o600)
+    original_stat = Path.stat
+    def nonroot_stat(path, *args, **kwargs):
+        actual = original_stat(path, *args, **kwargs)
+        if path == key_file:
+            return SimpleNamespace(st_uid=1004, st_mode=actual.st_mode)
+        return actual
+    monkeypatch.setattr(Path, "stat", nonroot_stat)
+    with pytest.raises(cutover.CutoverError, match="must be root-owned"):
+        cutover.load_catalog_verification_key(key_file)

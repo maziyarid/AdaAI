@@ -1,3 +1,34 @@
+# Final staged validation — 2026-09-30
+
+- Combined reliability / Context Core / all ops tests: 357 passed as maziyarid.
+- Python 3.11 compileall, Python 3.9 ops syntax check and diff whitespace check passed.
+- Hash-bound control-core candidate adds Agiflow owner/attempt/expiry fencing.
+- Real disposable MariaDB 10.11.19 rehearsal passed: wrong owner, expired lease,
+  and earlier attempt denied; current ACK succeeds; database destroyed.
+- Fixture repair makes existing signed-catalog tests portable without relaxing
+  the runtime root-ownership check; an explicit non-root rejection test passes.
+- No SonarQube scan: CLI absent. No Telegram live exchange or Agiflow live replay.
+- Runtime activation remains gated. Migration 006 remains HOLD.
+
+# 2026-09-30 — Ada closure continuation (staged; no deployment)
+
+Reconciled origin/main to e2aec304b219efeae2b9efb38ce277dbb0c5736e.
+The dirty main checkout at 5866888 is preserved; work uses the isolated
+fix/ada-closure-20260930 branch.
+
+Live control-core, Mistral and Ms Robot bridge are active. Telegram is inactive
+with exec-condition. The Agiflow consumer timer is active but its oneshot fails
+HTTP 403 / Cloudflare 1010 on every minute tick. The staged dispatcher watchdog
+units are absent from production.
+
+Changes: recover the live Agiflow consumer into versioned source, add a durable
+connector circuit/lock and safe diagnostics; preserve medical verifier job IDs,
+return nonzero on failed verification, park failed chains and reuse pd_outbox
+with truthful persistence reporting; honour the watchdog CLI future-skew flag.
+No production files, SQL, schedules, queue state, credentials or messages changed.
+Migration 006 remains HOLD; Telegram needs secure operator token installation;
+Ms Robot's consumer remains a separate application-side integration gate.
+
 ## 2026-09-20 — AAX-15 signed delegation trust boundary
 
 - Exact PR base for this patch: b4fb159c7dd10b47a6156bc92928b909e17d2f16.
