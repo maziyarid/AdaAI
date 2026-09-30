@@ -135,7 +135,8 @@ def main() -> int:
     args = ap.parse_args()
     try:
         result = inspect(args.sqlite, component=args.component,
-                         max_heartbeat_age=args.max_heartbeat_age)
+                         max_heartbeat_age=args.max_heartbeat_age,
+                         max_future_skew=args.max_future_skew)
     except (WatchdogError, sqlite3.Error) as exc:
         result = {"status": "blocked", "restart_recommended": False,
                   "reason": "watchdog_error", "error": str(exc)}

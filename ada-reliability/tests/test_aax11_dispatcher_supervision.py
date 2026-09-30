@@ -145,3 +145,15 @@ def test_small_future_clock_skew_is_tolerated(tmp_path):
     result = watchdog.inspect(db, now_epoch=now, max_heartbeat_age=180, max_future_skew=30)
     assert result["status"] == "healthy"
     assert result["restart_recommended"] is False
+
+
+def test_cli_honours_configured_future_skew(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    now = 2_000_000_000.0
+    hb = datetime.fromtimestamp(now + 10, tz=timezone.utc).isoformat()
+    db = make_db(tmp_path / "factory.sqlite3", hb)
+    monkeypatch.setattr(watchdog.time, "time", lambda: now)
+    monkeypatch.setattr(sys, "argv", ["watchdog", "--sqlite", str(db), "--max-future-skew", "0"])
+    assert watchdog.main() == 2
+    assert json.loads(capsys.readouterr().out)["reason"] == "heartbeat_future"
