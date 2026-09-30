@@ -21,6 +21,11 @@ Other target services keep their existing API parameters. The final conditional
 update also prevents an expired claim from updating their rows. Terminal ACK
 repetition is a read-only return; an older Agiflow generation still fails.
 
+Agiflow ACK is supported through the paired HTTP consumer. The existing legacy
+`ack-sync` CLI cannot supply the fenced owner/attempt parameters and therefore
+fails closed for Agiflow; do not use it to bypass the HTTP contract. Its other
+target-service interfaces are preserved.
+
 ## Verification
 
 pytest ops/control-core-hardening/tests

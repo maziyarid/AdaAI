@@ -19,6 +19,14 @@ remains stable across run IDs. replay=parked is reported only when the helper
 confirms durable persistence; missing/broken storage reports replay=UNAVAILABLE.
 No second outbox or MariaDB migration is introduced.
 
+The chain update is bound to the original stage, status and state JSON observed
+before verification. A newer same-stage human edit is preserved. Such a
+superseded run retains its evidence receipt and failure exit status but reports
+`chain_update=SUPERSEDED,replay=NOT_REQUIRED` instead of creating a stale chain
+blocker. A parked replay report additionally requires the helper's actual
+outbox state and stable/idempotency identity to match; a terminal idempotent hit
+is not reported as a parked recovery record.
+
 APPROVED and INSUFFICIENT_EVIDENCE remain their existing distinct evidence
 outcomes. Neither is a verifier execution failure. This patch does not change
 clinical approval, source sufficiency or human review requirements.

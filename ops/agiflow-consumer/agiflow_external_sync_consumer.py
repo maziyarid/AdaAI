@@ -40,7 +40,12 @@ class ConnectorError(ConsumerError):
 
 
 class QueueError(ConsumerError):
-    pass
+    failure_scope = "queue"
+
+    def __init__(self, code: str, *, retryable: bool = True):
+        self.code = re.sub(r"[^A-Z0-9_]", "_", code.split(":")[0].upper())[:80]
+        self.retryable = retryable
+        super().__init__(self.code)
 
 
 class LeaseBudgetError(QueueError):
@@ -65,6 +70,13 @@ class AgiflowClient(Protocol):
     def create_comment(self, task_id: str, content: str) -> dict[str, Any]: ...
 
 
+class CommentScan(list):
+    """A bounded scan can reconcile a seen marker but cannot prove absence."""
+    def __init__(self, rows, *, complete: bool):
+        super().__init__(rows)
+        self.complete = complete
+
+
 class RejectRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Never forward API keys or bearer tokens to a redirected origin.
@@ -80,7 +92,8 @@ def _json_request(
     *,
     headers: dict[str, str],
     timeout: float = 20.0,
-) -> tuple[int, dict[str, Any]]:
+    allow_null: bool = False,
+) -> tuple[int, dict[str, Any] | None]:
     data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -120,6 +133,8 @@ def _json_request(
         obj = json.loads(raw or "{}")
     except json.JSONDecodeError as exc:
         raise ConnectorError("INVALID_JSON_RESPONSE") from exc
+    if allow_null and obj is None:
+        return status, None
     if not isinstance(obj, dict):
         raise ConnectorError("INVALID_OBJECT_RESPONSE")
     return status, obj
@@ -138,12 +153,17 @@ class HttpControlCoreClient:
         if self.claim_deadline is None or time.monotonic() + seconds >= self.claim_deadline:
             raise LeaseBudgetError("CLAIM_LEASE_BUDGET_EXHAUSTED")
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        _, obj = _json_request(
-            self.base_url.rstrip("/") + path,
-            payload,
-            headers={"Authorization": "Bearer " + self.token},
-        )
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            _, obj = _json_request(
+                self.base_url.rstrip("/") + path,
+                payload,
+                headers={"Authorization": "Bearer " + self.token},
+                allow_null=path == "/external-sync/claim",
+            )
+        except ConnectorError as exc:
+            # Core authorization/lease errors are not Agiflow availability.
+            raise QueueError(exc.code, retryable=exc.retryable) from exc
         return obj
 
     def claim(self) -> dict[str, Any] | None:
@@ -158,8 +178,10 @@ class HttpControlCoreClient:
         self.claim_target = None
         self.claim_attempt = None
         self.claim_deadline = None
-        if not obj:
+        if obj is None:
             return None
+        if not isinstance(obj, dict):
+            raise QueueError("CLAIM_RESPONSE_INVALID")
         target = str(obj.get("stable_id") or obj.get("id") or "")
         attempt = obj.get("attempts")
         if obj.get("locked_by") != WORKER_ID or type(attempt) is not int or attempt < 1 or not target:
@@ -253,12 +275,13 @@ class StatelessAgiflowMcpClient:
         names = {str(t.get("name") or "") for t in tools if isinstance(t, dict)}
         missing = sorted(REQUIRED_TOOLS - names)
         if missing:
-            raise ConnectorError("AGIFLOW_REQUIRED_TOOLS_MISSING:" + ",".join(missing))
+            raise ConnectorError("AGIFLOW_REQUIRED_TOOLS_MISSING:" + ",".join(missing), retryable=False)
         return {"tool_count": len(names), "required_tools": sorted(REQUIRED_TOOLS)}
 
     def list_comments(self, task_id: str) -> list[dict[str, Any]]:
         comments: list[dict[str, Any]] = []
         offset = 0
+        complete = False
         while offset < MAX_COMMENT_SCAN:
             page = self._call_tool(
                 1000 + offset,
@@ -276,17 +299,19 @@ class StatelessAgiflowMcpClient:
             batch = page.get("comments") or []
             if not isinstance(batch, list):
                 raise ConnectorError("COMMENTS_LIST_INVALID")
+            if len(batch) > COMMENT_PAGE_SIZE:
+                raise ConnectorError("COMMENTS_PAGE_LIMIT_INVALID")
             comments.extend(x for x in batch if isinstance(x, dict))
             total = page.get("total")
-            if isinstance(total, int):
-                if total > MAX_COMMENT_SCAN:
-                    raise ConnectorError("COMMENT_SCAN_LIMIT_EXCEEDED")
-                if len(comments) >= total:
+            offset += len(batch)
+            if type(total) is int:
+                if offset >= total:
+                    complete = True
                     break
             if len(batch) < COMMENT_PAGE_SIZE:
+                complete = type(total) is not int
                 break
-            offset += len(batch)
-        return comments
+        return CommentScan(comments, complete=complete)
 
     def create_comment(self, task_id: str, content: str) -> dict[str, Any]:
         obj = self._call_tool(
@@ -409,7 +434,23 @@ def _ack_and_mirror(
 
 
 def safe_error(exc: Exception) -> str:
-    return exc.code if isinstance(exc, ConnectorError) else type(exc).__name__
+    return exc.code if isinstance(exc, (ConnectorError, QueueError)) else type(exc).__name__
+
+
+def _retry_after_error(core, item, parsed, exc, phase, *, mirror):
+    try:
+        ack = _ack_and_mirror(core, item, parsed, "retry",
+                              error="AGIFLOW_" + phase.upper() + "_FAILED:" + safe_error(exc),
+                              mirror=mirror)
+    except Exception as ack_exc:
+        if isinstance(exc, ConnectorError):
+            # Preserve provider denial even when queue bookkeeping is unavailable.
+            # The authoritative lease can expire; never mask the connector latch.
+            raise exc from ack_exc
+        raise
+    return {"status": "RETRYABLE", "claimed": True, "phase": phase, "ack": ack,
+            "retryable": getattr(exc, "retryable", True), "reason": safe_error(exc),
+            "failure_scope": getattr(exc, "failure_scope", "connector")}
 
 
 def consume_one(
@@ -451,15 +492,7 @@ def consume_one(
     try:
         before = agiflow.list_comments(task_id)
     except Exception as exc:
-        ack = _ack_and_mirror(
-            core,
-            item,
-            parsed,
-            "retry",
-            error="AGIFLOW_PRECHECK_FAILED:" + safe_error(exc),
-            mirror=mirror,
-        )
-        return {"status": "RETRYABLE", "claimed": True, "phase": "precheck", "ack": ack, "retryable": getattr(exc, "retryable", True), "reason": safe_error(exc)}
+        return _retry_after_error(core, item, parsed, exc, "precheck", mirror=mirror)
 
     matches = _comment_marker_matches(before, marker)
     if len(matches) > 1:
@@ -509,33 +542,21 @@ def consume_one(
             "ack": ack,
         }
 
+    if not getattr(before, "complete", True):
+        return _retry_after_error(core, item, parsed, QueueError("COMMENT_SCAN_LIMIT_EXCEEDED"),
+                                  "precheck", mirror=mirror)
+
     try:
         if hasattr(core, "ensure_write_budget"):
             core.ensure_write_budget()
         agiflow.create_comment(task_id, parsed["content"])
     except Exception as exc:
-        ack = _ack_and_mirror(
-            core,
-            item,
-            parsed,
-            "retry",
-            error="AGIFLOW_CREATE_UNCERTAIN:" + safe_error(exc),
-            mirror=mirror,
-        )
-        return {"status": "RETRYABLE", "claimed": True, "phase": "create", "ack": ack, "retryable": getattr(exc, "retryable", True), "reason": safe_error(exc)}
+        return _retry_after_error(core, item, parsed, exc, "create", mirror=mirror)
 
     try:
         after = agiflow.list_comments(task_id)
     except Exception as exc:
-        ack = _ack_and_mirror(
-            core,
-            item,
-            parsed,
-            "retry",
-            error="AGIFLOW_VERIFY_FAILED:" + safe_error(exc),
-            mirror=mirror,
-        )
-        return {"status": "RETRYABLE", "claimed": True, "phase": "verify", "ack": ack, "retryable": getattr(exc, "retryable", True), "reason": safe_error(exc)}
+        return _retry_after_error(core, item, parsed, exc, "verify", mirror=mirror)
 
     matches = _comment_marker_matches(after, marker)
     if len(matches) == 0:
@@ -625,7 +646,7 @@ def build_agiflow_client() -> StatelessAgiflowMcpClient:
 def build_live_clients() -> tuple[HttpControlCoreClient, StatelessAgiflowMcpClient]:
     core_token = os.environ.get("CONTROL_API_TOKEN", "").strip()
     if not core_token:
-        raise ConsumerError("MISSING_ENV:CONTROL_API_TOKEN")
+        raise QueueError("CONTROL_API_TOKEN_MISSING", retryable=False)
     return (
         HttpControlCoreClient(
             os.environ.get("CONTROL_CORE_URL", DEFAULT_CONTROL_URL).strip()
@@ -666,7 +687,7 @@ def main() -> int:
             "failure_count", "owner_action_required",
         }}
         print(json.dumps(public, sort_keys=True, default=str))
-        return 0
+        return 1 if result.get("status") == "QUEUE_ERROR" else 0
     except Exception as exc:
         print(
             json.dumps(

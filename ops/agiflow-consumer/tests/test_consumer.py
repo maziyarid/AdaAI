@@ -291,3 +291,91 @@ def test_http_ack_is_refused_after_local_lease_deadline(monkeypatch):
     monkeypatch.setattr(core, "_post", lambda *args: pytest.fail("expired ACK sent"))
     with pytest.raises(consumer.QueueError, match="CLAIM_LEASE_BUDGET_EXHAUSTED"):
         core.ack("row1", "succeeded")
+
+
+def test_queue_binding_error_does_not_park_healthy_connector(tmp_path):
+    path = tmp_path / "gate.json"
+    def invalid_binding():
+        raise consumer.QueueError("CLAIM_BINDING_INVALID")
+    with CircuitGate(path) as gate:
+        result = gate.run(invalid_binding)
+    assert result["status"] == "QUEUE_ERROR"
+    with CircuitGate(path) as gate:
+        assert gate.run(lambda: {"status": "NO_ELIGIBLE_UNIT"})["status"] == "NO_ELIGIBLE_UNIT"
+
+
+def test_core_http_conflict_does_not_park_agiflow(monkeypatch, tmp_path):
+    from io import BytesIO
+    def reject(*args, **kwargs):
+        raise HTTPError("http://127.0.0.1:8770", 409, "fixture", {}, BytesIO(b'{}'))
+    monkeypatch.setattr(consumer.HTTP_OPENER, "open", reject)
+    core = consumer.HttpControlCoreClient("http://127.0.0.1:8770", "fixture")
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(core.claim)
+    assert result["status"] == "QUEUE_ERROR"
+    assert result["reason"] == "HTTP_409"
+
+
+def test_core_null_claim_reports_empty_without_cooldown(monkeypatch, tmp_path):
+    from io import BytesIO
+    class Response(BytesIO):
+        status = 200
+        headers = {"Content-Type": "application/json"}
+    monkeypatch.setattr(consumer.HTTP_OPENER, "open", lambda *a, **k: Response(b'null'))
+    core = consumer.HttpControlCoreClient("http://127.0.0.1:8770", "fixture")
+    adapter = Agiflow()
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(lambda: consumer.consume_one(core, adapter, enabled=True, mirror=False))
+    assert result["status"] == "NO_ELIGIBLE_UNIT"
+    assert json.loads((tmp_path / "gate.json").read_text())["state"] == "closed"
+
+
+def test_failed_reset_probe_preserves_permanent_latch(tmp_path):
+    path = tmp_path / "gate.json"
+    with CircuitGate(path, clock=lambda: 100) as gate:
+        gate.run(lambda: {"status": "RETRYABLE", "reason": "HTTP_403", "retryable": False})
+    def unavailable():
+        raise consumer.ConnectorError("HTTP_503")
+    with CircuitGate(path, clock=lambda: 101) as gate:
+        assert gate.run(lambda: pytest.fail("reset ran queue"), reset_probe=unavailable)["status"] == "PARKED"
+    with CircuitGate(path, clock=lambda: 1000) as gate:
+        assert gate.run(lambda: pytest.fail("failed reset reopened parked consumer"))["status"] == "PARKED"
+
+
+@pytest.mark.parametrize("matching", [True, False])
+def test_large_comment_history_reconciles_seen_marker_without_unsafe_create(monkeypatch, matching):
+    client = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
+    rows = [{"id": "existing1", "content": "[sync:event1]" if matching else "other"}]
+    def call(request_id, name, args):
+        if name == "list_task_comments":
+            return {"comments": rows, "total": 10000}
+        pytest.fail("incomplete history allowed comment creation")
+    monkeypatch.setattr(client, "_call_tool", call)
+    monkeypatch.setattr(client, "probe", lambda: {"ok": True})
+    core = Core()
+    result = consumer.consume_one(core, client, enabled=True, mirror=False)
+    assert result["status"] == ("DEDUPED_EXISTING" if matching else "RETRYABLE")
+    assert core.acks[-1][1] == ("succeeded" if matching else "retry")
+
+
+def test_permanent_provider_denial_survives_failed_queue_ack(tmp_path):
+    core, adapter = Core(), Agiflow()
+    def denied(task):
+        raise consumer.ConnectorError("HTTP_403", retryable=False)
+    def ack_failed(*args, **kwargs):
+        raise consumer.QueueError("HTTP_503")
+    adapter.list_comments = denied
+    core.ack = ack_failed
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(lambda: consumer.consume_one(core, adapter, enabled=True, mirror=False))
+    assert result["status"] == "PARKED"
+    assert result["reason"] == "HTTP_403"
+
+
+def test_missing_core_credential_does_not_park_connector(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTROL_API_TOKEN", raising=False)
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(consumer.build_live_clients)
+    assert result["status"] == "QUEUE_ERROR"
+    assert result["reason"] == "CONTROL_API_TOKEN_MISSING"
+    assert result["owner_action_required"] is True

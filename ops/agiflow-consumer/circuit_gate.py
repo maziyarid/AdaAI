@@ -100,6 +100,11 @@ class CircuitGate:
             try:
                 reset_probe()
             except Exception as exc:
+                if state["state"] == "parked":
+                    # Failed reset must never turn a human-reset latch into cooldown.
+                    return {"status": "PARKED", "claimed": False,
+                            "reason": state.get("reason", "CONNECTOR_FAILURE"),
+                            "owner_action_required": True}
                 result = self._failure(state, getattr(exc, "code", type(exc).__name__),
                                        getattr(exc, "retryable", True))
                 result["claimed"] = False
@@ -114,9 +119,16 @@ class CircuitGate:
         try:
             result = action()
         except Exception as exc:
+            if getattr(exc, "failure_scope", None) == "queue":
+                return {"status": "QUEUE_ERROR", "claimed": None,
+                        "reason": getattr(exc, "code", "QUEUE_ERROR"),
+                        "retryable": getattr(exc, "retryable", True),
+                        "owner_action_required": not getattr(exc, "retryable", True)}
             return self._failure(state, getattr(exc, "code", type(exc).__name__),
                                  getattr(exc, "retryable", True))
         if result.get("status") == "RETRYABLE":
+            if result.get("failure_scope") == "queue":
+                return result
             outcome = self._failure(state, result.get("reason", "CONNECTOR_FAILURE"),
                                     result.get("retryable", True))
             outcome["claimed"] = bool(result.get("claimed"))

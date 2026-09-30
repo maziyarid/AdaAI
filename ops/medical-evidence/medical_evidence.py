@@ -702,7 +702,10 @@ def record_verifier_failure(row, run_id, code, verifier_job_id):
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
         obj = json.loads(proc.stdout) if proc.returncode == 0 else {}
-        if obj.get("status") == "PERSISTED" and obj.get("replay") == "parked":
+        outbox = obj.get("outbox") or {}
+        if (obj.get("status") == "PERSISTED" and obj.get("replay") == "parked"
+                and isinstance(outbox, dict) and outbox.get("state") == "parked"
+                and outbox.get("stable_id") == key and outbox.get("idempotency_key") == key):
             return {"replay": "parked", "stable_id": key}
     except Exception:
         pass
@@ -736,7 +739,7 @@ def deterministic_verdicts(chain_id: str, claims: list[dict[str, Any]], evidence
     return approved, rejected
 
 
-def save_evidence_run(row: sqlite3.Row, state: dict[str, Any], run_id: str, claims: list[dict[str, Any]], evidence_by_claim: dict[str, list[dict[str, Any]]], provider_status: dict[str, Any], verifier_job_id: str | None, verifier_result: dict[str, Any] | None, approved: list[dict[str, Any]], rejected: list[dict[str, Any]], status: str) -> None:
+def save_evidence_run(row: sqlite3.Row, state: dict[str, Any], run_id: str, claims: list[dict[str, Any]], evidence_by_claim: dict[str, list[dict[str, Any]]], provider_status: dict[str, Any], verifier_job_id: str | None, verifier_result: dict[str, Any] | None, approved: list[dict[str, Any]], rejected: list[dict[str, Any]], status: str) -> bool:
     packet = {"run_id": run_id, "chain_id": row["chain_id"], "created_at": utcnow(), "claims": claims, "evidence_by_claim": evidence_by_claim, "provider_status": provider_status, "verifier_job_id": verifier_job_id, "verifier_provider": (verifier_result or {}).get("_verifier_provider"), "verifier_model": (verifier_result or {}).get("_verifier_model"), "approved_claims": approved, "rejected_claims": rejected, "status": status}
     source_rows = [(claim_key, s) for claim_key, values in evidence_by_claim.items() for s in values]; ts = utcnow()
     with connect() as conn:
@@ -771,13 +774,14 @@ def save_evidence_run(row: sqlite3.Row, state: dict[str, Any], run_id: str, clai
         updated = conn.execute(
             "UPDATE content_ladder SET status=?,state_json=?,updated_at=? "
             "WHERE chain_id=? AND stage=? AND state_json=? "
-            "AND status IN ('awaiting_claim_approval','ready')",
+            "AND status=? AND status IN ('awaiting_claim_approval','ready')",
             (new_status, json.dumps(fresh_state,ensure_ascii=False,separators=(",",":")),
-             ts, row["chain_id"], row["stage"], fresh["state_json"] if fresh else "{}"),
+             ts, row["chain_id"], row["stage"], row["state_json"], row["status"]),
         )
         if updated.rowcount == 0:
-            return  # Keep the evidence receipt; preserve the newer chain state.
+            return False  # Keep the evidence receipt; preserve the newer chain state.
         conn.execute("INSERT INTO content_ladder_events(chain_id,stage,event_type,detail_json,created_at) VALUES(?,?,?,?,?)", (row["chain_id"],fresh["stage"] if fresh else row["stage"],"medical_evidence_verified",json.dumps({"run_id":run_id,"approved":len(approved),"rejected":len(rejected),"status":new_status},ensure_ascii=False),ts))
+    return True
 
 
 def process_chain(chain_id: str) -> dict[str, Any]:
@@ -803,9 +807,11 @@ def process_chain(chain_id: str) -> dict[str, Any]:
         provider_status["verifier"] = {"status": "ERROR", "error": failure_code}
 
         rejected = [{"claim_id":"","claim_key":c["claim_key"],"candidate_wording":c["candidate_wording"],"allowed_wording":"","verdict":"INSUFFICIENT_EVIDENCE","evidence_strength":"UNVERIFIED","medical_risk":c["medical_risk"],"source_ids":[],"rationale":"Independent verifier failed; fail closed.","uncertainty":c.get("uncertainty") or ""} for c in claims]
-    save_evidence_run(row,state,run_id,claims,evidence_by_claim,provider_status,verifier_job_id,verifier_result,approved,rejected,status)
-    recovery = record_verifier_failure(row, run_id, failure_code, verifier_job_id) if status == "VERIFIER_FAILED" else {}
-    return {**recovery, "chain_id":chain_id,"run_id":run_id,"status":status,"claims":len(claims),"approved":len(approved),"rejected":len(rejected),"source_count":sum(len(v) for v in evidence_by_claim.values()),"verifier_job_id":verifier_job_id,"provider_status":provider_status}
+    saved = save_evidence_run(row,state,run_id,claims,evidence_by_claim,provider_status,verifier_job_id,verifier_result,approved,rejected,status)
+    recovery = {}
+    if status == "VERIFIER_FAILED":
+        recovery = record_verifier_failure(row, run_id, failure_code, verifier_job_id) if saved else {"replay": "NOT_REQUIRED"}
+    return {**recovery, "chain_update": "APPLIED" if saved else "SUPERSEDED", "chain_id":chain_id,"run_id":run_id,"status":status,"claims":len(claims),"approved":len(approved),"rejected":len(rejected),"source_count":sum(len(v) for v in evidence_by_claim.values()),"verifier_job_id":verifier_job_id,"provider_status":provider_status}
 
 
 def pending_chain_ids(limit: int) -> list[str]:

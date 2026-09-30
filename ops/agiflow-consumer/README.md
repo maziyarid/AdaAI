@@ -16,6 +16,12 @@ back off from 60 seconds to at most 900 seconds. State is atomically replaced,
 fsynced and mode 0600. Invalid state fails closed. The circuit is availability
 metadata only; it holds no jobs, comments, credentials or recovery ownership.
 
+Queue binding, core HTTP and lease errors are reported in the queue domain;
+they cannot permanently latch a healthy Agiflow connector. A failed reset probe
+preserves an existing permanent latch. Provider failures retain their own
+classification even if the retry ACK fails. An incomplete bounded comment scan
+can reconcile an existing marker, but cannot authorise a new comment.
+
 Provider bodies and queue payloads are excluded from stdout and circuit state.
 Acknowledgements carry the server-issued owner and attempt generation; the
 paired control-core patch rejects stale or expired claims. Before comment

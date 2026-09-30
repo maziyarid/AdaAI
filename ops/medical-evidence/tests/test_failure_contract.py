@@ -79,7 +79,12 @@ def test_existing_ledger_failure_is_never_reported_as_queued(monkeypatch,stdout,
     calls=[]
     def fake(argv,**kwargs):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv,rc,stdout,"private error")
+        response = stdout
+        if stdout == '{"status":"PERSISTED","replay":"parked"}':
+            response = json.dumps({"status":"PERSISTED", "replay":"parked", "outbox":{
+                "state":"parked", "stable_id":argv[argv.index("--stable-id")+1],
+                "idempotency_key":argv[argv.index("--idempotency-key")+1]}})
+        return subprocess.CompletedProcess(argv,rc,response,"private error")
     monkeypatch.setattr(medical.subprocess,"run",fake)
     row={"chain_id":"chain1","worker_id":"DRB-MED","site_key":"site1"}
     first=medical.record_verifier_failure(row,"run1","VERIFIER_RUN_FAILED","job1")
@@ -118,3 +123,42 @@ def test_failed_verification_does_not_overwrite_advanced_human_review(tmp_path,m
         assert (stage,status)==("G","awaiting_human_review")
         assert json.loads(raw)["human_review_status"]=="PENDING"
         assert c.execute("SELECT count(*) FROM medical_evidence_runs").fetchone()[0]==1
+
+
+def test_failed_verification_preserves_same_stage_human_change(tmp_path, monkeypatch):
+    db = database(tmp_path, monkeypatch)
+    row, state = medical.load_chain("chain1")
+    newer = '{"human_review_status":"APPROVED","approved_claims":[{"claim_id":"human1"}],"verification_status":"APPROVED"}'
+    with medical.connect() as c:
+        c.execute("UPDATE content_ladder SET status='ready',state_json=? WHERE chain_id='chain1'", (newer,))
+    saved = medical.save_evidence_run(row, state, "run1", [], {}, {}, "job1", None, [], [], "VERIFIER_FAILED")
+    with sqlite3.connect(db) as c:
+        assert c.execute("SELECT status,state_json FROM content_ladder").fetchone() == ("ready", newer)
+        assert c.execute("SELECT count(*) FROM medical_evidence_runs").fetchone()[0] == 1
+    assert saved is False
+
+
+def test_superseded_failure_does_not_report_or_enqueue_chain_parking(tmp_path, monkeypatch):
+    database(tmp_path, monkeypatch)
+    claims = [{"claim_key":"claim1","candidate_wording":"fixture","medical_risk":"M1","uncertainty":""}]
+    monkeypatch.setattr(medical, "candidate_claims_from_state", lambda state: claims)
+    monkeypatch.setattr(medical, "retrieve_for_claim", lambda *args: ([], {}))
+    monkeypatch.setattr(medical, "verifier_prompt", lambda *args: "fixture")
+    def concurrent_failure(*args):
+        with medical.connect() as c:
+            c.execute("UPDATE content_ladder SET stage='G',status='awaiting_human_review' WHERE chain_id='chain1'")
+        raise medical.VerifierError("VERIFIER_RUN_FAILED", "job1")
+    monkeypatch.setattr(medical, "queue_and_run_verifier", concurrent_failure)
+    monkeypatch.setattr(medical, "record_verifier_failure", lambda *args: pytest.fail("superseded chain enqueued as parked"))
+    result = medical.process_chain("chain1")
+    assert result["status"] == "VERIFIER_FAILED"
+    assert result["chain_update"] == "SUPERSEDED"
+    assert result["replay"] == "NOT_REQUIRED"
+
+
+def test_terminal_ledger_idempotent_hit_is_not_reported_as_parked(monkeypatch):
+    def terminal(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status":"PERSISTED", "replay":"parked", "outbox":{"status":"IDEMPOTENT_HIT", "state":"succeeded"}}), "")
+    monkeypatch.setattr(medical.subprocess, "run", terminal)
+    row = {"chain_id":"chain1", "worker_id":"DRB-MED", "site_key":"site1"}
+    assert medical.record_verifier_failure(row, "run1", "VERIFIER_RUN_FAILED", "job1")["replay"] == "UNAVAILABLE"
