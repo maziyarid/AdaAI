@@ -453,6 +453,17 @@ def _retry_after_error(core, item, parsed, exc, phase, *, mirror):
             "failure_scope": getattr(exc, "failure_scope", "connector")}
 
 
+def _quarantine_incomplete_scan(core, item, parsed, phase, *, mirror):
+    # The same bounded scan cannot prove absence on a larger history. Keep this
+    # obligation in the existing queue for operator reconciliation, not retries
+    # or a second replay owner. An observed marker is handled before this guard.
+    reason = "COMMENT_SCAN_LIMIT_EXCEEDED"
+    ack = _ack_and_mirror(core, item, parsed, "quarantined", error=reason, mirror=mirror)
+    return {"status": "QUARANTINED", "claimed": True, "phase": phase,
+            "reason": reason, "owner_action_required": True,
+            "failure_scope": "queue", "ack": ack}
+
+
 def consume_one(
     core: CoreClient,
     agiflow: AgiflowClient,
@@ -543,8 +554,7 @@ def consume_one(
         }
 
     if not getattr(before, "complete", True):
-        return _retry_after_error(core, item, parsed, QueueError("COMMENT_SCAN_LIMIT_EXCEEDED"),
-                                  "precheck", mirror=mirror)
+        return _quarantine_incomplete_scan(core, item, parsed, "precheck", mirror=mirror)
 
     try:
         if hasattr(core, "ensure_write_budget"):
@@ -560,6 +570,8 @@ def consume_one(
 
     matches = _comment_marker_matches(after, marker)
     if len(matches) == 0:
+        if not getattr(after, "complete", True):
+            return _quarantine_incomplete_scan(core, item, parsed, "verify", mirror=mirror)
         ack = _ack_and_mirror(
             core,
             item,

@@ -354,8 +354,64 @@ def test_large_comment_history_reconciles_seen_marker_without_unsafe_create(monk
     monkeypatch.setattr(client, "probe", lambda: {"ok": True})
     core = Core()
     result = consumer.consume_one(core, client, enabled=True, mirror=False)
-    assert result["status"] == ("DEDUPED_EXISTING" if matching else "RETRYABLE")
-    assert core.acks[-1][1] == ("succeeded" if matching else "retry")
+    assert result["status"] == ("DEDUPED_EXISTING" if matching else "QUARANTINED")
+    assert core.acks[-1][1] == ("succeeded" if matching else "quarantined")
+    if not matching:
+        assert result["owner_action_required"] is True
+        assert result["reason"] == "COMMENT_SCAN_LIMIT_EXCEEDED"
+
+
+def test_incomplete_history_stops_rescanning_after_queue_quarantine(tmp_path):
+    class DurableCore(Core):
+        def __init__(self):
+            super().__init__()
+            self.path = tmp_path / "queue.json"
+            self.path.write_text(json.dumps({"state": "pending"}))
+        def claim(self):
+            self.claims += 1
+            return item() if json.loads(self.path.read_text())["state"] == "pending" else None
+        def ack(self, target, outcome, **kwargs):
+            result = super().ack(target, outcome, **kwargs)
+            self.path.write_text(json.dumps({"state": outcome}))
+            return result
+    class LargeHistory(Agiflow):
+        def __init__(self):
+            super().__init__()
+            self.scans = 0
+        def list_comments(self, task_id):
+            self.scans += 1
+            return consumer.CommentScan([], complete=False)
+    core, adapter = DurableCore(), LargeHistory()
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == "QUARANTINED"
+    # Reopen durable queue state: normal eligibility never includes quarantine.
+    restarted = DurableCore.__new__(DurableCore)
+    Core.__init__(restarted)
+    restarted.path = core.path
+    assert consumer.consume_one(restarted, adapter, enabled=True, mirror=False)["status"] == "NO_ELIGIBLE_UNIT"
+    assert adapter.scans == 1
+    assert adapter.writes == 0
+
+
+def test_incomplete_postcreate_verification_quarantines_unknown_outcome():
+    core, adapter = Core(), Agiflow()
+    scans = iter([consumer.CommentScan([], complete=True), consumer.CommentScan([], complete=False)])
+    adapter.list_comments = lambda task_id: next(scans)
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert adapter.writes == 1
+    assert result["status"] == "QUARANTINED"
+    assert result["phase"] == "verify"
+    assert result["owner_action_required"] is True
+    assert core.acks[-1][1] == "quarantined"
+
+
+def test_incomplete_scan_does_not_quarantine_healthy_connector(tmp_path):
+    core, adapter = Core(), Agiflow()
+    adapter.list_comments = lambda task_id: consumer.CommentScan([], complete=False)
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(lambda: consumer.consume_one(core, adapter, enabled=True, mirror=False))
+    assert result["status"] == "QUARANTINED"
+    assert json.loads((tmp_path / "gate.json").read_text())["state"] == "closed"
 
 
 def test_permanent_provider_denial_survives_failed_queue_ack(tmp_path):
