@@ -62,4 +62,39 @@ class ScopedListingTest(unittest.TestCase):
                 row=db.execute('select state,attempts from events where event_id=?',(event_id,)).fetchone()
                 self.assertEqual((row['state'],row['attempts']),('acked',0) if action=='ack' else ('queued',1))
 
+    def lookup(self, event_id='zzz', suffix='&project_key=own-project&site_key=example.com', token=True):
+        from urllib.parse import quote
+        url=self.url.split('/v1/events?')[0]+'/v1/events/'+quote(event_id,safe='')+'?target=ms_robot'+suffix
+        req=urllib.request.Request(url,headers={'Authorization':'Bearer disposable-fixture-only'} if token else {})
+        with urllib.request.urlopen(req,timeout=2) as response: return json.load(response)
+    def test_scoped_lookup_confirms_acked_identity_without_changing_bridge_state(self):
+        with bridge.db() as db:
+            db.execute("update events set state='acked',acked_at='2026-10-03T10:00:00+00:00' where event_id='zzz'")
+            before=tuple(db.execute("select * from events where event_id='zzz'").fetchone())
+        answer=self.lookup()
+        self.assertEqual(answer['scope'],{'project_key':'own-project','site_key':'example.com'})
+        self.assertEqual(answer['event']['event_id'],'zzz')
+        self.assertEqual(answer['event']['state'],'acked')
+        self.assertEqual(answer['event']['payload'],{'reference':'zzz'})
+        with bridge.db() as db:
+            self.assertEqual(tuple(db.execute("select * from events where event_id='zzz'").fetchone()),before)
+    def test_lookup_requires_exact_scope_and_auth_and_hides_foreign_identity(self):
+        for suffix,expected in [('',400),('&project_key=own-project',400),('&project_key=&site_key=example.com',400),('&project_key=own-project&site_key=example.com&site_key=example.com',400),('&project_key=other-project&site_key=example.com',404)]:
+            with self.subTest(suffix=suffix):
+                with self.assertRaises(urllib.error.HTTPError) as error:self.lookup(suffix=suffix)
+                self.assertEqual(error.exception.code,expected)
+        for identity in ['missing','aaa','aab']:
+            with self.assertRaises(urllib.error.HTTPError) as error:self.lookup(identity)
+            self.assertEqual(error.exception.code,404)
+        with self.assertRaises(urllib.error.HTTPError) as error:self.lookup(token=False)
+        self.assertEqual(error.exception.code,401)
+    def test_lookup_addresses_encoded_id_and_never_returns_last_error(self):
+        identity='event:lookup/reference'
+        bridge.insert_event({'event_id':identity,'idempotency_key':identity,'source':'ada','target':'ms_robot','event_type':'ada.alert.queued','project_key':'own-project','site_key':'example.com','payload':{'reference':'fixture'}})
+        with bridge.db() as db:db.execute("update events set state='dead',last_error='private diagnostic' where event_id=?",(identity,))
+        answer=self.lookup(identity)['event']
+        self.assertEqual(answer['state'],'dead')
+        self.assertNotIn('last_error',answer)
+        self.assertNotIn('private diagnostic',json.dumps(answer))
+
 if __name__=='__main__': unittest.main()

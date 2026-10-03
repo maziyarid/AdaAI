@@ -134,6 +134,17 @@ def row_to_public(r):
     d.pop("last_error",None)
     return d
 
+def event_scope(qs,required=False):
+    if not required and 'project_key' not in qs and 'site_key' not in qs:
+        return None
+    scope={}
+    for key in ('project_key','site_key'):
+        values=qs.get(key,[])
+        if len(values)!=1 or not values[0] or len(values[0])>160 or values[0]!=values[0].strip() or any(ord(char)<32 or ord(char)==127 for char in values[0]):
+            raise ValueError('invalid_event_scope')
+        scope[key]=values[0]
+    return scope
+
 class Handler(BaseHTTPRequestHandler):
     server_version="MsRobotBridge/1.0"
     def log_message(self,fmt,*args):
@@ -177,14 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception: limit=50
             if target not in ALLOWED_TARGETS: return self.send_json(400,{"error":"unsupported_target"})
             if state not in {"queued","delivered","acked","dead"}: return self.send_json(400,{"error":"unsupported_state"})
-            scope=None
-            if 'project_key' in qs or 'site_key' in qs:
-                scope={}
-                for key in ('project_key','site_key'):
-                    values=qs.get(key,[])
-                    if len(values)!=1 or not values[0] or len(values[0])>160 or values[0]!=values[0].strip() or any(ord(char)<32 or ord(char)==127 for char in values[0]):
-                        return self.send_json(400,{'error':'invalid_event_scope'})
-                    scope[key]=values[0]
+            try: scope=event_scope(qs)
+            except ValueError: return self.send_json(400,{'error':'invalid_event_scope'})
             with db() as c:
                 if scope is None:
                     rows=c.execute("SELECT * FROM events WHERE target=? AND state=? ORDER BY created_at,event_id LIMIT ?",(target,state,limit)).fetchall()
@@ -193,6 +198,23 @@ class Handler(BaseHTTPRequestHandler):
             result={"events":[row_to_public(r) for r in rows],"count":len(rows)}
             if scope is not None: result['scope']=scope
             return self.send_json(200,result)
+        parts=[p for p in u.path.split('/') if p]
+        if len(parts)==3 and parts[:2]==['v1','events']:
+            if not self.require_auth(): return
+            qs=parse_qs(u.query,keep_blank_values=True)
+            targets=qs.get('target',[])
+            if len(targets)!=1 or targets[0] not in ALLOWED_TARGETS:
+                return self.send_json(400,{'error':'unsupported_target'})
+            try: scope=event_scope(qs,required=True)
+            except ValueError: return self.send_json(400,{'error':'invalid_event_scope'})
+            event_id=unquote(parts[2])
+            if not event_id or len(event_id)>80 or any(ord(char)<32 or ord(char)==127 for char in event_id):
+                return self.send_json(400,{'error':'invalid_event_id'})
+            with db() as c:
+                row=c.execute('SELECT * FROM events WHERE event_id=? AND target=? AND project_key=? AND site_key=?',
+                    (event_id,targets[0],scope['project_key'],scope['site_key'])).fetchone()
+            if row is None: return self.send_json(404,{'error':'event_not_found'})
+            return self.send_json(200,{'event':row_to_public(row),'scope':scope})
         return self.send_json(404,{"error":"not_found"})
     def do_POST(self):
         u=urlparse(self.path)

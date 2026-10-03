@@ -58,6 +58,25 @@ Authentication, queue states, attempt budgets and execution authority are
 unchanged. Old bridge installations without a confirmed scoped-list capability
 must not be used for the new tenant-scoped consumer.
 
+### Exact event confirmation
+
+Authenticated `GET /v1/events/<encoded-event-id>` requires one valid `target`
+and the exact `project_key`/`site_key` pair. It returns `event` with the existing
+public envelope fields and confirms the pair in `scope`. It can address queued,
+delivered, acked and dead events, including an ACK whose response was lost.
+Missing and out-of-scope identities both return 404. Malformed scope/target
+returns 400; authentication precedes any identity lookup. The endpoint does not
+change event state, attempts or timestamps and never returns `last_error`.
+
+The consumer uses this lookup only for its bounded, durable pending receipts.
+It validates the complete returned envelope and compares its canonical identity
+fingerprint with the stored receipt before confirming an `acked` state locally.
+Matching queued/delivered records may resume the ordinary receipt-first lifecycle.
+Missing, changed, dead, malformed or unavailable records remain unconfirmed and
+receive no transition from reconciliation. An ACK never grants action authority.
+Legacy installations lacking this endpoint cannot automatically reconcile an
+uncertain ACK; they must retain the receipt and require operator verification.
+
 ## Repository authority and naming
 
 Canonical product name is Ms Robot. The historical repository identifier maziyarid/Canopy remains unchanged until AAX-42 completes source reconciliation.
