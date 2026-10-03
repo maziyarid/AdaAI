@@ -227,8 +227,15 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts)==4 and parts[:2]==["v1","events"] and parts[3] in {"delivered","ack","fail"}:
                 event_id=unquote(parts[2]); action=parts[3]; body=self.read_json() if action=="fail" else {}
                 with db() as c:
+                    # Serialize the read/update pair: stale failure counts must not
+                    # overwrite each other or move a terminal receipt backwards.
+                    c.execute("BEGIN IMMEDIATE")
                     row=c.execute("SELECT * FROM events WHERE event_id=?",(event_id,)).fetchone()
                     if not row: return self.send_json(404,{"error":"event_not_found"})
+                    if row["state"]=="dead" or (row["state"]=="acked" and action!="ack"):
+                        return self.send_json(409,{"error":"event_state_conflict"})
+                    if (row["state"]=="acked" and action=="ack") or (row["state"]=="delivered" and action=="delivered"):
+                        return self.send_json(200,{"ok":True,"event_id":event_id,"state":row["state"]})
                     ts=now()
                     if action=="delivered":
                         c.execute("UPDATE events SET state='delivered',delivered_at=?,updated_at=? WHERE event_id=?",(ts,ts,event_id))

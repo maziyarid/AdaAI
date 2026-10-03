@@ -77,6 +77,26 @@ receive no transition from reconciliation. An ACK never grants action authority.
 Legacy installations lacking this endpoint cannot automatically reconcile an
 uncertain ACK; they must retain the receipt and require operator verification.
 
+### Atomic transitions and terminal states
+
+Each authenticated transition serializes its identity read and update in one
+SQLite `BEGIN IMMEDIATE` transaction. Concurrent failure reports count separately
+and cannot overwrite each other's retry attempts. The existing attempt budget
+is unchanged; once dead, an event receives no more attempts or state changes.
+
+Acknowledged and dead states are terminal. A late delivered/fail request against
+an acked event, or any transition against a dead event, returns HTTP 409
+`event_state_conflict` without changing timestamps, attempts or error metadata.
+Repeated ACK of an acked event and repeated delivered of a delivered event return
+200 with the existing state and do not retimestamp it. ACK from queued remains
+compatible. No administrative reactivation or execution endpoint is introduced.
+
+A consumer that loses a race to another ACK keeps its durable receipt and uses
+the next bounded exact lookup to reconcile it; a transition conflict never
+permits an action or an unconditional retry. Concurrent consumption still shares
+a bridge credential and has no per-attempt worker lease, so live multi-worker
+acceptance remains a separate rollout decision.
+
 ## Repository authority and naming
 
 Canonical product name is Ms Robot. The historical repository identifier maziyarid/Canopy remains unchanged until AAX-42 completes source reconciliation.
