@@ -8,7 +8,7 @@ import sqlite3
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 from pathlib import Path
 
 HOST=os.environ.get("MSROBOT_BRIDGE_HOST","127.0.0.1")
@@ -170,16 +170,29 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200,{"ok":True,"version":"1.0","queued":q,"dead":dead})
         if u.path=="/v1/events":
             if not self.require_auth(): return
-            qs=parse_qs(u.query)
+            qs=parse_qs(u.query,keep_blank_values=True)
             target=(qs.get("target") or [None])[0]
             state=(qs.get("state") or ["queued"])[0]
             try: limit=max(1,min(int((qs.get("limit") or ["50"])[0]),200))
             except Exception: limit=50
             if target not in ALLOWED_TARGETS: return self.send_json(400,{"error":"unsupported_target"})
             if state not in {"queued","delivered","acked","dead"}: return self.send_json(400,{"error":"unsupported_state"})
+            scope=None
+            if 'project_key' in qs or 'site_key' in qs:
+                scope={}
+                for key in ('project_key','site_key'):
+                    values=qs.get(key,[])
+                    if len(values)!=1 or not values[0] or len(values[0])>160 or values[0]!=values[0].strip() or any(ord(char)<32 or ord(char)==127 for char in values[0]):
+                        return self.send_json(400,{'error':'invalid_event_scope'})
+                    scope[key]=values[0]
             with db() as c:
-                rows=c.execute("SELECT * FROM events WHERE target=? AND state=? ORDER BY created_at,event_id LIMIT ?",(target,state,limit)).fetchall()
-            return self.send_json(200,{"events":[row_to_public(r) for r in rows],"count":len(rows)})
+                if scope is None:
+                    rows=c.execute("SELECT * FROM events WHERE target=? AND state=? ORDER BY created_at,event_id LIMIT ?",(target,state,limit)).fetchall()
+                else:
+                    rows=c.execute("SELECT * FROM events WHERE target=? AND state=? AND project_key=? AND site_key=? ORDER BY created_at,event_id LIMIT ?",(target,state,scope['project_key'],scope['site_key'],limit)).fetchall()
+            result={"events":[row_to_public(r) for r in rows],"count":len(rows)}
+            if scope is not None: result['scope']=scope
+            return self.send_json(200,result)
         return self.send_json(404,{"error":"not_found"})
     def do_POST(self):
         u=urlparse(self.path)
@@ -190,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200 if result["duplicate"] else 201,result)
             parts=[p for p in u.path.split("/") if p]
             if len(parts)==4 and parts[:2]==["v1","events"] and parts[3] in {"delivered","ack","fail"}:
-                event_id=parts[2]; action=parts[3]; body=self.read_json() if action=="fail" else {}
+                event_id=unquote(parts[2]); action=parts[3]; body=self.read_json() if action=="fail" else {}
                 with db() as c:
                     row=c.execute("SELECT * FROM events WHERE event_id=?",(event_id,)).fetchone()
                     if not row: return self.send_json(404,{"error":"event_not_found"})

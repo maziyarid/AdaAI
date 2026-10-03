@@ -40,6 +40,24 @@ Do not put credentials, OTPs, raw authentication headers, private keys, medical 
 queued -> delivered -> acked.
 A failed consumer can return fail; bounded failures eventually park the event as dead. No event is considered processed from silence alone.
 
+### Scoped bounded listing
+
+Authenticated `GET /v1/events` accepts an optional exact `project_key` and
+`site_key` pair alongside target/state/limit. Both scope fields must occur once,
+be nonblank, contain no control characters or surrounding whitespace, and fit
+160 characters. Partial, blank, repeated or malformed scopes return 400.
+Filtering happens before the existing bounded limit, so another tenant's backlog
+cannot starve scoped intake. A scoped response confirms the exact pair in
+`scope`; requests without either field retain the existing global response.
+Scope is a consumer selection boundary, not a new credential or approval grant.
+
+Transition paths percent-decode the event ID after splitting the raw path into
+segments. Stable reference IDs containing a colon or slash remain addressable
+when properly encoded; SQL continues to use parameterised identity lookup.
+Authentication, queue states, attempt budgets and execution authority are
+unchanged. Old bridge installations without a confirmed scoped-list capability
+must not be used for the new tenant-scoped consumer.
+
 ## Repository authority and naming
 
 Canonical product name is Ms Robot. The historical repository identifier maziyarid/Canopy remains unchanged until AAX-42 completes source reconciliation.
