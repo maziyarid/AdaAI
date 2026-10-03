@@ -17,13 +17,14 @@ import urllib.error
 import urllib.request
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 WORKER_ID = "ada-agiflow-external-sync-consumer"
 REQUIRED_TOOLS = {"list_task_comments", "create_task_comment"}
 IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,191}$")
 MAX_COMMENT_SCAN = 5000
 COMMENT_PAGE_SIZE = 100
+COMMENT_PAGE_LEASE_RESERVE = 45  # 20s page + 20s ACK + processing margin
 DEFAULT_CONTROL_URL = "http://127.0.0.1:8770"
 
 
@@ -66,15 +67,17 @@ class CoreClient(Protocol):
 
 class AgiflowClient(Protocol):
     def probe(self) -> dict[str, Any]: ...
-    def list_comments(self, task_id: str) -> list[dict[str, Any]]: ...
+    def list_comments(self, task_id: str, *,
+                      ensure_page_budget: Callable[[float], None] | None = None) -> list[dict[str, Any]]: ...
     def create_comment(self, task_id: str, content: str) -> dict[str, Any]: ...
 
 
 class CommentScan(list):
     """A bounded scan can reconcile a seen marker but cannot prove absence."""
-    def __init__(self, rows, *, complete: bool):
+    def __init__(self, rows, *, complete: bool, reason: str = "COMMENT_SCAN_LIMIT_EXCEEDED"):
         super().__init__(rows)
         self.complete = complete
+        self.reason = reason
 
 
 class RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -278,11 +281,21 @@ class StatelessAgiflowMcpClient:
             raise ConnectorError("AGIFLOW_REQUIRED_TOOLS_MISSING:" + ",".join(missing), retryable=False)
         return {"tool_count": len(names), "required_tools": sorted(REQUIRED_TOOLS)}
 
-    def list_comments(self, task_id: str) -> list[dict[str, Any]]:
+    def list_comments(self, task_id: str, *,
+                      ensure_page_budget: Callable[[float], None] | None = None) -> list[dict[str, Any]]:
         comments: list[dict[str, Any]] = []
         offset = 0
         complete = False
+        reason = "COMMENT_SCAN_LIMIT_EXCEEDED"
         while offset < MAX_COMMENT_SCAN:
+            if ensure_page_budget is not None:
+                try:
+                    ensure_page_budget(COMMENT_PAGE_LEASE_RESERVE)
+                except LeaseBudgetError:
+                    # Return observed markers, but never treat a time-bound
+                    # partial history as absence. Reserve the fenced ACK.
+                    reason = "COMMENT_SCAN_LEASE_BUDGET_EXHAUSTED"
+                    break
             page = self._call_tool(
                 1000 + offset,
                 "list_task_comments",
@@ -311,7 +324,7 @@ class StatelessAgiflowMcpClient:
             if len(batch) < COMMENT_PAGE_SIZE:
                 complete = type(total) is not int
                 break
-        return CommentScan(comments, complete=complete)
+        return CommentScan(comments, complete=complete, reason=reason)
 
     def create_comment(self, task_id: str, content: str) -> dict[str, Any]:
         obj = self._call_tool(
@@ -453,6 +466,17 @@ def _retry_after_error(core, item, parsed, exc, phase, *, mirror):
             "failure_scope": getattr(exc, "failure_scope", "connector")}
 
 
+def _quarantine_incomplete_scan(core, item, parsed, phase, *, mirror,
+                                reason="COMMENT_SCAN_LIMIT_EXCEEDED"):
+    # The same bounded scan cannot prove absence on a larger history. Keep this
+    # obligation in the existing queue for operator reconciliation, not retries
+    # or a second replay owner. An observed marker is handled before this guard.
+    ack = _ack_and_mirror(core, item, parsed, "quarantined", error=reason, mirror=mirror)
+    return {"status": "QUARANTINED", "claimed": True, "phase": phase,
+            "reason": reason, "owner_action_required": True,
+            "failure_scope": "queue", "ack": ack}
+
+
 def consume_one(
     core: CoreClient,
     agiflow: AgiflowClient,
@@ -490,7 +514,7 @@ def consume_one(
     marker = parsed["marker"]
     task_id = parsed["task_id"]
     try:
-        before = agiflow.list_comments(task_id)
+        before = agiflow.list_comments(task_id, ensure_page_budget=getattr(core, "ensure_write_budget", None))
     except Exception as exc:
         return _retry_after_error(core, item, parsed, exc, "precheck", mirror=mirror)
 
@@ -543,8 +567,8 @@ def consume_one(
         }
 
     if not getattr(before, "complete", True):
-        return _retry_after_error(core, item, parsed, QueueError("COMMENT_SCAN_LIMIT_EXCEEDED"),
-                                  "precheck", mirror=mirror)
+        return _quarantine_incomplete_scan(core, item, parsed, "precheck", mirror=mirror,
+                                          reason=getattr(before, "reason", "COMMENT_SCAN_LIMIT_EXCEEDED"))
 
     try:
         if hasattr(core, "ensure_write_budget"):
@@ -554,12 +578,15 @@ def consume_one(
         return _retry_after_error(core, item, parsed, exc, "create", mirror=mirror)
 
     try:
-        after = agiflow.list_comments(task_id)
+        after = agiflow.list_comments(task_id, ensure_page_budget=getattr(core, "ensure_write_budget", None))
     except Exception as exc:
         return _retry_after_error(core, item, parsed, exc, "verify", mirror=mirror)
 
     matches = _comment_marker_matches(after, marker)
     if len(matches) == 0:
+        if not getattr(after, "complete", True):
+            return _quarantine_incomplete_scan(core, item, parsed, "verify", mirror=mirror,
+                                              reason=getattr(after, "reason", "COMMENT_SCAN_LIMIT_EXCEEDED"))
         ack = _ack_and_mirror(
             core,
             item,

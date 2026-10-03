@@ -54,7 +54,7 @@ class Agiflow:
             raise self.error
         return {"ok": True}
 
-    def list_comments(self, task_id):
+    def list_comments(self, task_id, *, ensure_page_budget=None):
         return self.rows.copy()
 
     def create_comment(self, task_id, content):
@@ -209,7 +209,7 @@ def test_duplicate_marker_is_conflict_and_never_writes():
 
 def test_permanent_failure_after_claim_retains_retry_in_authoritative_queue(tmp_path):
     core, adapter = Core(), Agiflow()
-    def fail(task_id):
+    def fail(task_id, *, ensure_page_budget=None):
         raise consumer.ConnectorError("HTTP_401", retryable=False)
     adapter.list_comments = fail
     with CircuitGate(tmp_path / "gate.json") as gate:
@@ -354,13 +354,69 @@ def test_large_comment_history_reconciles_seen_marker_without_unsafe_create(monk
     monkeypatch.setattr(client, "probe", lambda: {"ok": True})
     core = Core()
     result = consumer.consume_one(core, client, enabled=True, mirror=False)
-    assert result["status"] == ("DEDUPED_EXISTING" if matching else "RETRYABLE")
-    assert core.acks[-1][1] == ("succeeded" if matching else "retry")
+    assert result["status"] == ("DEDUPED_EXISTING" if matching else "QUARANTINED")
+    assert core.acks[-1][1] == ("succeeded" if matching else "quarantined")
+    if not matching:
+        assert result["owner_action_required"] is True
+        assert result["reason"] == "COMMENT_SCAN_LIMIT_EXCEEDED"
+
+
+def test_incomplete_history_stops_rescanning_after_queue_quarantine(tmp_path):
+    class DurableCore(Core):
+        def __init__(self):
+            super().__init__()
+            self.path = tmp_path / "queue.json"
+            self.path.write_text(json.dumps({"state": "pending"}))
+        def claim(self):
+            self.claims += 1
+            return item() if json.loads(self.path.read_text())["state"] == "pending" else None
+        def ack(self, target, outcome, **kwargs):
+            result = super().ack(target, outcome, **kwargs)
+            self.path.write_text(json.dumps({"state": outcome}))
+            return result
+    class LargeHistory(Agiflow):
+        def __init__(self):
+            super().__init__()
+            self.scans = 0
+        def list_comments(self, task_id, *, ensure_page_budget=None):
+            self.scans += 1
+            return consumer.CommentScan([], complete=False)
+    core, adapter = DurableCore(), LargeHistory()
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == "QUARANTINED"
+    # Reopen durable queue state: normal eligibility never includes quarantine.
+    restarted = DurableCore.__new__(DurableCore)
+    Core.__init__(restarted)
+    restarted.path = core.path
+    assert consumer.consume_one(restarted, adapter, enabled=True, mirror=False)["status"] == "NO_ELIGIBLE_UNIT"
+    assert adapter.scans == 1
+    assert adapter.writes == 0
+
+
+def test_incomplete_postcreate_verification_quarantines_unknown_outcome():
+    core, adapter = Core(), Agiflow()
+    scans = iter([consumer.CommentScan([], complete=True), consumer.CommentScan([], complete=False)])
+    adapter.list_comments = lambda task_id, ensure_page_budget=None: next(scans)
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert adapter.writes == 1
+    assert result["status"] == "QUARANTINED"
+    assert result["phase"] == "verify"
+    assert result["owner_action_required"] is True
+    assert core.acks[-1][1] == "quarantined"
+
+
+def test_incomplete_scan_does_not_quarantine_healthy_connector(tmp_path):
+    core, adapter = Core(), Agiflow()
+    adapter.list_comments = lambda task_id, ensure_page_budget=None: consumer.CommentScan([], complete=False)
+    with CircuitGate(tmp_path / "gate.json") as gate:
+        result = gate.run(lambda: consumer.consume_one(core, adapter, enabled=True, mirror=False))
+    assert result["status"] == "QUARANTINED"
+    assert json.loads((tmp_path / "gate.json").read_text())["state"] == "closed"
 
 
 def test_permanent_provider_denial_survives_failed_queue_ack(tmp_path):
     core, adapter = Core(), Agiflow()
-    def denied(task):
+    def denied(task, *, ensure_page_budget=None):
         raise consumer.ConnectorError("HTTP_403", retryable=False)
     def ack_failed(*args, **kwargs):
         raise consumer.QueueError("HTTP_503")
@@ -379,3 +435,57 @@ def test_missing_core_credential_does_not_park_connector(tmp_path, monkeypatch):
     assert result["status"] == "QUEUE_ERROR"
     assert result["reason"] == "CONTROL_API_TOKEN_MISSING"
     assert result["owner_action_required"] is True
+
+
+@pytest.mark.parametrize("matching", [False, True])
+@pytest.mark.parametrize("postcreate", [False, True])
+@pytest.mark.parametrize("page_seconds", [3.3, 19.9])
+def test_slow_pagination_reserves_quarantine_ack_lease(monkeypatch, postcreate, page_seconds, matching):
+    clock = [0.0]
+    monkeypatch.setattr(consumer.time, "monotonic", lambda: clock[0])
+    core = consumer.HttpControlCoreClient("http://127.0.0.1:8770", "fixture")
+    state = {"outcome": "pending", "pages": 0, "writes": 0, "acks": []}
+    def claim():
+        if state["outcome"] != "pending":
+            return None
+        core.claim_target, core.claim_attempt, core.claim_deadline = "queue1", 1, 180.0
+        return item()
+    def ack_post(path, payload):
+        assert path == "/external-sync/queue1/ack"
+        clock[0] += 19.9
+        assert clock[0] < core.claim_deadline
+        state["outcome"] = payload["outcome"]
+        state["acks"].append(payload)
+        return {"status": payload["outcome"]}
+    monkeypatch.setattr(core, "claim", claim)
+    monkeypatch.setattr(core, "_post", ack_post)
+    adapter = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
+    monkeypatch.setattr(adapter, "probe", lambda: {"ok": True})
+    def call(request_id, name, args):
+        if name == "create_task_comment":
+            state["writes"] += 1
+            clock[0] += 19.9
+            return {"id": "uncertain"}
+        assert name == "list_task_comments"
+        if postcreate and not state["writes"]:
+            return {"comments": [], "total": 0}
+        state["pages"] += 1
+        clock[0] += page_seconds
+        rows = [{"id": str(i), "content": "other"} for i in range(100)]
+        if matching and state["pages"] == 1:
+            rows[0] = {"id": "observed", "content": "[sync:event1]"}
+        return {"comments": rows, "total": 6000}
+    monkeypatch.setattr(adapter, "_call_tool", call)
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == (("SUCCEEDED" if postcreate else "DEDUPED_EXISTING") if matching else "QUARANTINED")
+    if not matching:
+        assert result["phase"] == ("verify" if postcreate else "precheck")
+        assert result["reason"] == "COMMENT_SCAN_LEASE_BUDGET_EXHAUSTED"
+    assert state["writes"] == int(postcreate)
+    assert len(state["acks"]) == 1
+    assert state["acks"][0]["claim_attempt"] == 1
+    assert state["acks"][0]["worker_id"] == consumer.WORKER_ID
+    assert state["pages"] < 50
+    pages = state["pages"]
+    assert consumer.consume_one(core, adapter, enabled=True, mirror=False)["status"] == "NO_ELIGIBLE_UNIT"
+    assert state["pages"] == pages

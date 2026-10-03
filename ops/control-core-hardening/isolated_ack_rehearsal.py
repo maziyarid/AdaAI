@@ -120,10 +120,25 @@ def run(candidate: Path):
                                            worker_id="fixture-worker", claim_attempt=2)
         assert repeated["status"] == "succeeded"
         assert ns["claim_external_sync"]("fixture-worker", "agiflow", 30) is None
+        scan_row = ns["queue_external_sync"]("agiflow", "task_comment", "large-history-task",
+                 "create_task_comment", {"content": "retained fixture"}, "scan-idem", "scan-stable")
+        scan_claim = ns["claim_external_sync"]("fixture-worker", "agiflow", 30)
+        assert scan_claim["id"] == scan_row["id"]
+        deny(lambda: ns["ack_external_sync"](scan_claim["id"], "quarantined",
+                 error="COMMENT_SCAN_LIMIT_EXCEEDED", worker_id="wrong-worker", claim_attempt=1))
+        quarantined = ns["ack_external_sync"](scan_claim["id"], "quarantined",
+                 error="COMMENT_SCAN_LIMIT_EXCEEDED", worker_id="fixture-worker", claim_attempt=1)
+        assert quarantined["status"] == "quarantined"
+        assert ns["claim_external_sync"]("fixture-worker", "agiflow", 30) is None
+        retained = read(scan_claim["id"])
+        assert retained["attempts"] == 1
+        assert retained["last_error"] == "COMMENT_SCAN_LIMIT_EXCEEDED"
+        assert json.loads(retained["payload_json"])["content"] == "retained fixture"
         return {"production": False, "skip_networking": True,
                 "mariadb_version": environment["version"], "wrong_owner_denied": True,
                 "expired_lease_denied": True, "same_worker_old_attempt_denied": True,
                 "current_attempt_ack_succeeded": True, "repeated_ack_no_reclaim": True,
+                "quarantined_scan_no_reclaim": True, "quarantine_evidence_retained": True,
                 "candidate_sha256": CANDIDATE_SHA256, "disposable_destroyed": True}
     finally:
         if server is not None:

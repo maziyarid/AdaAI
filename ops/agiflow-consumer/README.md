@@ -22,6 +22,20 @@ preserves an existing permanent latch. Provider failures retain their own
 classification even if the retry ACK fails. An incomplete bounded comment scan
 can reconcile an existing marker, but cannot authorise a new comment.
 
+If a bounded scan is incomplete and no marker is observed, the existing queue
+item becomes quarantined with COMMENT_SCAN_LIMIT_EXCEEDED. Normal claims exclude
+it, so later invocations do not rescan the same history. The connector remains
+available for other items. The same rule applies to incomplete verification
+after a create whose outcome is uncertain. Operator reconciliation must inspect
+the existing task/marker before authorising a retry; never enqueue a replacement
+with a new idempotency key. Queue records and their evidence are retained.
+Pagination also checks the claim lease before each page, reserving 45 seconds
+for the 20-second page request, 20-second ACK and processing margin. A scan
+stopped by this guard is incomplete and quarantined with
+COMMENT_SCAN_LEASE_BUDGET_EXHAUSTED unless an existing marker reconciles it.
+An unavailable or expired ACK still fails closed; durable quarantine cannot
+be guaranteed when the control core cannot accept the acknowledgement.
+
 Provider bodies and queue payloads are excluded from stdout and circuit state.
 Acknowledgements carry the server-issued owner and attempt generation; the
 paired control-core patch rejects stale or expired claims. Before comment
