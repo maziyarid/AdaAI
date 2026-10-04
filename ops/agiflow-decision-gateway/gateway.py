@@ -246,6 +246,16 @@ class DecisionServer(socketserver.UnixStreamServer):
         os.chmod(path,0o660)
 
 
+def clear_owned_socket(path,uid):
+    # lstat never follows an attacker-controlled/dangling symlink.
+    if not path.exists() and not path.is_symlink():
+        return
+    info=path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=uid:
+        raise DecisionError('SOCKET_PATH_UNSAFE')
+    path.unlink()
+
+
 def main():
     if os.environ.get('ADA_DECISIONS_ENABLED')!='true':
         print('{"status":"DISABLED"}')
@@ -258,10 +268,7 @@ def main():
             actor=os.environ['ADA_OPERATOR_LABEL'])
         path=Path('/run/ada-decision-gateway/decision.sock')
         # systemd owns the private runtime directory. Never remove arbitrary paths.
-        if path.exists():
-            if not stat.S_ISSOCK(path.lstat().st_mode) or path.stat().st_uid!=os.getuid():
-                raise DecisionError('SOCKET_PATH_UNSAFE')
-            path.unlink()
+        clear_owned_socket(path,os.getuid())
         with DecisionServer(str(path),gateway) as server: server.serve_forever()
     except Exception:
         print('{"status":"ERROR","error":"GATEWAY_START_FAILED"}')
