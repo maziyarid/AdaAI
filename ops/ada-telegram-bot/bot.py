@@ -311,23 +311,34 @@ def format_task_snapshot(data):
     return "\n".join(lines)
 
 
-def queue_decision(update):
-    """Project only an explicit command; failures retain the original inbound retry."""
-    if not DECISIONS_ENABLED:
-        return "ثبت تصمیم فعلاً فعال نیست. تصمیم را در Agiflow ثبت کنید."
+DECISION_FORMAT_HELP="برای ثبت تصمیم بنویسید:\n/decision AAX-36 | تصمیم | دلیل\nفقط متن قابل انتشار در Agiflow را وارد کنید."
+DECISION_DISABLED_HELP="ثبت تصمیم فعلاً فعال نیست. تصمیم را در Agiflow ثبت کنید."
+DECISION_TOO_LONG_HELP="متن تصمیم و دلیل طولانی است. هر بخش را به کمتر از ۲۰۰۰ نویسه کوتاه کنید."
+
+def prepare_decision(update):
     message=update.get("message") or {}
     text=(message.get("text") or "").strip()
     rest=text[len(text.split()[0]):].strip() if text.split() else ""
     parts=[part.strip() for part in rest.split("|")]
     if len(parts)!=3 or not all(parts) or not re.fullmatch(r"AAX-[1-9][0-9]{0,7}",parts[0]):
-        return "برای ثبت تصمیم بنویسید:\n/decision AAX-36 | تصمیم | دلیل\nفقط متن قابل انتشار در Agiflow را وارد کنید."
+        return None,None,DECISION_FORMAT_HELP
     request={"task":parts[0],"decision":parts[1],"rationale":parts[2],
              "update_id":update.get("update_id"),"date":message.get("date"),
              "user_id":(message.get("from") or {}).get("id"),
              "chat_id":(message.get("chat") or {}).get("id")}
     raw=json.dumps(request,ensure_ascii=False).encode("utf-8")+b"\n"
     if len(raw)>16384:
-        return "متن تصمیم و دلیل طولانی است. هر بخش را به کمتر از ۲۰۰۰ نویسه کوتاه کنید."
+        return None,None,DECISION_TOO_LONG_HELP
+    return request,raw,None
+
+def queue_decision(update):
+    """Project only an explicit command; failures retain the original inbound retry."""
+    if not DECISIONS_ENABLED:
+        return DECISION_DISABLED_HELP
+    request,raw,error=prepare_decision(update)
+    if error:
+        return error
+    parts=(request["task"],request["decision"],request["rationale"])
     try:
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
             client.settimeout(40)
@@ -452,6 +463,11 @@ def handle(update):
 
     command=text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     if command=="/decision":
+        if not DECISIONS_ENABLED:
+            send(chat_id,DECISION_DISABLED_HELP); return
+        _,_,decision_error=prepare_decision(update)
+        if decision_error:
+            send(chat_id,decision_error); return
         if KILL_SWITCH.exists():
             send(chat_id,"دستورهای ورودی موقتاً غیرفعال شده‌اند."); return
         if not decision_rate_allowed(user_id,update):
