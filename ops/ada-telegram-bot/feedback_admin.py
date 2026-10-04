@@ -67,28 +67,33 @@ def export(version):
     if (not version or len(version)>128 or version.startswith(".") or
             any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in version)):
         raise SystemExit("invalid version")
-    with conn() as c:
-        rows=c.execute("SELECT id,category,original,preferred,reason,created_at,qalam_version,fingerprint FROM feedback WHERE status='approved' ORDER BY id").fetchall()
-    if not rows:
-        raise SystemExit("no approved feedback to export")
-    groups={"train":[],"dev":[],"eval":[]}
-    for r in rows:
-        d=dict(r)
-        # Older captures could retain lowercase emails. Require renewed review
-        # rather than silently changing an approved example or its split identity.
-        if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
-                         str(d.get(field) or ""), re.IGNORECASE)
-               for field in ("original","preferred","reason")):
-            raise SystemExit("approved feedback requires privacy review before export")
-        d["split_group"]=split_group(d["original"])
-        d["split"]=bucket(d["split_group"])
-        groups[d["split"]].append(d)
-    DATASETS.mkdir(parents=True,mode=0o700,exist_ok=True)
-    os.chmod(DATASETS,0o700)
-    # All exporters use this lock; publication occurs only after complete writes.
-    lock=os.open(str(DATASETS/".export.lock"),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    database=conn()
+    lock=None
     stage=None
     try:
+        # Freeze approval state until the immutable release is published. Any
+        # concurrent approval/rejection writer must wait for this transaction.
+        database.execute("BEGIN IMMEDIATE")
+        rows=database.execute("SELECT id,category,original,preferred,reason,created_at,qalam_version,fingerprint FROM feedback WHERE status='approved' ORDER BY id").fetchall()
+        if not rows:
+            raise SystemExit("no approved feedback to export")
+        groups={"train":[],"dev":[],"eval":[]}
+        for r in rows:
+            d=dict(r)
+            # Older captures could retain lowercase emails. Require renewed review
+            # rather than silently changing an approved example or its split identity.
+            if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+                             str(d.get(field) or ""), re.IGNORECASE)
+                   for field in ("original","preferred","reason")):
+                raise SystemExit("approved feedback requires privacy review before export")
+            d["split_group"]=split_group(d["original"])
+            d["split"]=bucket(d["split_group"])
+            groups[d["split"]].append(d)
+        DATASETS.mkdir(parents=True,mode=0o700,exist_ok=True)
+        os.chmod(DATASETS,0o700)
+        # The filesystem lock serializes exporters; the SQLite write transaction
+        # above additionally prevents approval state from changing mid-publication.
+        lock=os.open(str(DATASETS/".export.lock"),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
         os.fchmod(lock,0o600)
         fcntl.flock(lock,fcntl.LOCK_EX)
         out=DATASETS/version
@@ -114,6 +119,7 @@ def export(version):
         manifest["manifest_sha256"]=sha(mp)
         sync_directory(stage)
         os.rename(stage,out)
+        stage=None
         try:
             sync_directory(DATASETS)
         except OSError:
@@ -121,7 +127,12 @@ def export(version):
     finally:
         if stage is not None and stage.exists():
             shutil.rmtree(stage)
-        os.close(lock)
+        if lock is not None:
+            os.close(lock)
+        try:
+            database.rollback()
+        finally:
+            database.close()
     print(json.dumps(manifest,ensure_ascii=False,indent=2,sort_keys=True))
 
 def stats():
