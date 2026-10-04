@@ -210,9 +210,9 @@ def status_text():
     try: load=", ".join(f"{x:.2f}" for x in os.getloadavg())
     except Exception: load="unknown"
     q,d,p=queue_stats()
-    return ("Ada Telegram bridge: online\\n"
-      f"Host: {socket.gethostname()}\\nUptime: {uptime_text()}\\nLoad: {load}\\nMemory: {memory_text()}\\n"
-      f"Disk /: {disk.used/disk.total*100:.1f}% used\\nOutbox queued/dead: {q}/{d}\\nInbound pending: {p}\\n"
+    return ("Ada Telegram bridge: online\n"
+      f"Host: {socket.gethostname()}\nUptime: {uptime_text()}\nLoad: {load}\nMemory: {memory_text()}\n"
+      f"Disk /: {disk.used/disk.total*100:.1f}% used\nOutbox queued/dead: {q}/{d}\nInbound pending: {p}\n"
       f"Command kill-switch: {'ON' if KILL_SWITCH.exists() else 'off'}")
 
 def redact_feedback(text):
@@ -324,7 +324,7 @@ def flush_outbox(chat_id,limit=10):
     with db() as c: rows=c.execute("SELECT * FROM outbox WHERE status='queued' AND next_attempt_at<=? ORDER BY id LIMIT ?",(now,limit)).fetchall()
     for row in rows:
         try:
-            prefix=f"[{row['severity'].upper()}] {row['source']}\\n"
+            prefix=f"[{row['severity'].upper()}] {row['source']}\n"
             results=send(chat_id,prefix+row["text"]); mid=results[-1].get("message_id") if results else None
             with db() as c: c.execute("UPDATE outbox SET status='sent',sent_at=?,telegram_message_id=?,last_error=NULL WHERE id=?",(utcnow(),mid,row["id"]))
             log("outbox_sent",outbox_id=row["id"],message_id=mid)
@@ -335,7 +335,7 @@ def flush_outbox(chat_id,limit=10):
 
 def health_text():
     q,d,p=queue_stats()
-    return f"Ada health\\nready: {'yes' if READY_FILE.exists() else 'no'}\\noutbox queued: {q}\\noutbox dead-letter: {d}\\ninbound pending: {p}\\nkill-switch: {'ON' if KILL_SWITCH.exists() else 'off'}"
+    return f"Ada health\nready: {'yes' if READY_FILE.exists() else 'no'}\noutbox queued: {q}\noutbox dead-letter: {d}\ninbound pending: {p}\nkill-switch: {'ON' if KILL_SWITCH.exists() else 'off'}"
 
 def handle(update):
     m=update.get("message")
@@ -363,7 +363,7 @@ def handle(update):
     if not rate_allowed(user_id):
         send(chat_id,"تعداد درخواست‌ها در این دقیقه زیاد شده. کمی بعد دوباره امتحان کنید."); log("rate_limited",level="warning",chat_id=chat_id,user_id=user_id); return
 
-    command=text.split()[0].split("@")[0].lower() if text else ""
+    command=text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     if KILL_SWITCH.exists() and command not in ("/ping","/health","/help","/start"):
         send(chat_id,"دستورهای ورودی موقتاً غیرفعال شده‌اند."); return
 
@@ -378,7 +378,7 @@ def handle(update):
             heading="کارهای مسدودشده:" if kind=="blocked" else "کارهای فعال:"
             send(chat_id,heading+"\n"+format_task_snapshot(data))
         except Exception as exc:
-            log("agiflow_read_failed",level="warning",error_type=type(exc).__name__,detail=str(exc)[:160])
+            log("agiflow_read_failed",level="warning",error_type=type(exc).__name__)
             send(chat_id,"فعلاً خواندن وضعیت Agiflow ممکن نیست؛ کمی بعد دوباره امتحان کنید.")
     elif command=="/id": send(chat_id,f"chat ID: {chat_id}\nuser ID: {user_id}")
     elif command=="/alerttest":
@@ -411,10 +411,13 @@ def handle(update):
         try:
             send(chat_id,chat_with_ada(text))
         except Exception as exc:
-            log("chat_backend_failed",level="warning",error_type=type(exc).__name__,detail=str(exc)[:160])
+            log("chat_backend_failed",level="warning",error_type=type(exc).__name__)
             send(chat_id,"فعلاً ارتباط با هسته گفت‌وگو برقرار نیست. کمی بعد دوباره امتحان کنید.")
 
-    log("command_handled",command=command or "chat",chat_id=chat_id,user_id=user_id,update_id=update.get("update_id"))
+    known_commands={"/start","/help","/ping","/status","/health","/tasks","/blocked",
+                    "/id","/alerttest","/feedbackstatus","/feedback"}
+    command_category=command if command in known_commands else ("unknown" if command else "chat")
+    log("command_handled",command=command_category,chat_id=chat_id,user_id=user_id,update_id=update.get("update_id"))
 
 def store_updates(updates):
     if not updates: return
