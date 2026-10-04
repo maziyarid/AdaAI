@@ -169,3 +169,30 @@ def test_leading_whitespace_decision_reaches_gateway(bot):
     bot.DECISION_SOCKET='/does/not/exist'
     with pytest.raises(RuntimeError,match='decision_gateway_unavailable'):
         bot.handle(update(text='  /decision AAX-36 | Use one queue | Preserve ownership'))
+
+def admission_counts(bot):
+    with bot.db() as c:
+        return (
+            c.execute('select count(*) from rate_events').fetchone()[0],
+            c.execute('select count(*) from decision_admission').fetchone()[0],
+        )
+
+def test_malformed_decision_does_not_consume_shared_rate_or_admission(bot):
+    before=admission_counts(bot)
+    bot.handle(update(text='/decision missing fields'))
+    assert admission_counts(bot)==before
+    assert bot.sent and '/decision AAX-' in bot.sent[-1]
+
+def test_disabled_decision_does_not_consume_shared_rate_or_admission(bot):
+    bot.DECISIONS_ENABLED=False
+    before=admission_counts(bot)
+    bot.handle(update())
+    assert admission_counts(bot)==before
+    assert bot.sent and 'فعال نیست' in bot.sent[-1]
+
+def test_oversized_decision_does_not_consume_shared_rate_or_admission(bot):
+    before=admission_counts(bot)
+    bot.handle(update(text='/decision AAX-36 | '+('x'*9000)+' | '+('y'*9000)))
+    assert admission_counts(bot)==before
+    assert bot.sent and 'طولانی' in bot.sent[-1]
+
