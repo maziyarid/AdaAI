@@ -211,5 +211,10 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn("private_command_value",logs.getvalue().lower())
         self.assertIn('"command":"unknown"',logs.getvalue())
 
+    def test_installer_uses_collision_resistant_private_backups(self):
+        script=(HERE/"install.sh").read_text()
+        self.assertIn('install -d -o root -g root -m 0700 "$DEST/backups"',script)
+        self.assertIn('BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-install.XXXXXX")"',script)
+
 if __name__=="__main__":
     unittest.main()

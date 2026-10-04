@@ -69,5 +69,10 @@ class BridgeTests(unittest.TestCase):
             row=c.execute("select state,target,event_type from events").fetchone()
         self.assertEqual((row["state"],row["target"],row["event_type"]),("queued","ms_robot","integration.health"))
 
+    def test_installer_uses_collision_resistant_private_backups(self):
+        script=(HERE/"install.sh").read_text()
+        self.assertIn('install -d -o root -g root -m 0700 "$DEST/backups"',script)
+        self.assertIn('BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-install.XXXXXX")"',script)
+
 if __name__=="__main__":
     unittest.main()
