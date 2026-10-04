@@ -17,7 +17,10 @@ def read_status(path):
         data = stream.read(MAX_STATUS_BYTES + 1)
     if len(data) > MAX_STATUS_BYTES:
         raise ValueError("status too large")
-    result = json.loads(data)
+    try:
+        result = json.loads(data)
+    except RecursionError:
+        raise ValueError("status nesting invalid") from None
     if not isinstance(result, dict):
         raise ValueError("status is not an object")
     return result

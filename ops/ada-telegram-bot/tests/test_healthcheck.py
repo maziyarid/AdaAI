@@ -166,6 +166,20 @@ class BotHealthTests(unittest.TestCase):
         result = self.assert_unhealthy()
         self.assertNotIn("private fixture text", json.dumps(result))
 
+    def test_deeply_nested_readiness_fails_with_json_diagnostic(self):
+        nested = "[" * 1200 + "0" + "]" * 1200
+        text = json.dumps(self.ready)[:-1] + ', "unused":' + nested + "}"
+        (self.state / "ready.json").write_text(text)
+        result = self.assert_unhealthy()
+        self.assertIn("readiness_invalid", result["errors"])
+
+    def test_deeply_nested_heartbeat_fails_with_json_diagnostic(self):
+        nested = "[" * 1200 + "0" + "]" * 1200
+        text = json.dumps(self.heartbeat)[:-1] + ', "unused":' + nested + "}"
+        (self.state / "heartbeat.json").write_text(text)
+        result = self.assert_unhealthy()
+        self.assertIn("heartbeat_invalid", result["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()
