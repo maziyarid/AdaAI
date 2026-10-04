@@ -42,6 +42,8 @@ def qalam_release_label():
         pass
     return "unresolved"
 QALAM_VERSION=qalam_release_label()
+DECISIONS_ENABLED=os.environ.get("ADA_DECISIONS_ENABLED","false")=="true"
+DECISION_SOCKET=os.environ.get("ADA_DECISION_SOCKET","/run/ada-decision-gateway/decision.sock")
 CHAT_HISTORY=[]
 POLL_TIMEOUT=max(5,min(int(os.environ.get("TELEGRAM_POLL_TIMEOUT","20")),40))
 RATE_LIMIT_PER_MIN=max(2,min(int(os.environ.get("TELEGRAM_COMMANDS_PER_MIN","20")),120))
@@ -108,6 +110,8 @@ def init_db():
           reason TEXT,status TEXT NOT NULL DEFAULT 'pending_review',created_at TEXT NOT NULL,actor_user_id TEXT NOT NULL,
           source_update_id INTEGER,qalam_version TEXT NOT NULL,fingerprint TEXT UNIQUE);
         CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback(status,id);
+        CREATE TABLE IF NOT EXISTS decision_admission(
+          update_id INTEGER PRIMARY KEY,payload_sha256 TEXT NOT NULL,admitted_at TEXT NOT NULL);
         """)
         c.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('next_update_id','0')")
     os.chmod(DB_PATH,0o600)
@@ -184,6 +188,34 @@ def rate_allowed(user_id):
         c.execute("INSERT INTO rate_events(user_id,ts) VALUES(?,?)",(str(user_id),now))
     return True
 
+def decision_payload_digest(update):
+    try:
+        encoded=json.dumps(update,ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).encode("utf-8")
+    except (TypeError,ValueError):
+        raise RuntimeError("decision_update_invalid") from None
+    return hashlib.sha256(encoded).hexdigest()
+
+def decision_rate_allowed(user_id,update):
+    uid=update.get("update_id") if isinstance(update,dict) else None
+    if type(uid) is not int or uid<0:
+        raise RuntimeError("decision_update_invalid")
+    digest=decision_payload_digest(update)
+    now=int(time.time()); floor=now-60
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row=c.execute("SELECT payload_sha256 FROM decision_admission WHERE update_id=?",(uid,)).fetchone()
+        if row:
+            if row["payload_sha256"]!=digest:
+                raise RuntimeError("decision_update_mismatch")
+            return True
+        c.execute("DELETE FROM rate_events WHERE ts<?",(floor,))
+        n=c.execute("SELECT COUNT(*) FROM rate_events WHERE user_id=? AND ts>=?",(str(user_id),floor)).fetchone()[0]
+        if n>=RATE_LIMIT_PER_MIN:
+            return False
+        c.execute("INSERT INTO rate_events(user_id,ts) VALUES(?,?)",(str(user_id),now))
+        c.execute("INSERT INTO decision_admission(update_id,payload_sha256,admitted_at) VALUES(?,?,?)",(uid,digest,utcnow()))
+    return True
+
 def queue_stats():
     with db() as c:
         return (c.execute("SELECT COUNT(*) FROM outbox WHERE status='queued'").fetchone()[0],
@@ -221,7 +253,7 @@ def redact_feedback(text):
       (r'(?i)Bearer\s+[A-Za-z0-9._~+/=-]{12,}', 'Bearer [REDACTED]'),
       (r'\b\d{6,12}:[A-Za-z0-9_-]{20,}\b', '[TELEGRAM_TOKEN_REDACTED]'),
       (r'(?i)\b(api[_ -]?key|token|secret|password)\s*[:=]\s*\S+', r'\1=[REDACTED]'),
-      (r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', '[EMAIL_REDACTED]'),
+      (r'(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', '[EMAIL_REDACTED]'),
       (r'(?<!\d)(?:\+?98|0)?9\d{9}(?!\d)', '[PHONE_REDACTED]')
     ]
     for pat,repl in patterns: x=re.sub(pat,repl,x)
@@ -278,6 +310,62 @@ def format_task_snapshot(data):
     if total>len(tasks): lines.append(f"… و {total-len(tasks)} مورد دیگر")
     return "\n".join(lines)
 
+
+def queue_decision(update):
+    """Project only an explicit command; failures retain the original inbound retry."""
+    if not DECISIONS_ENABLED:
+        return "ثبت تصمیم فعلاً فعال نیست. تصمیم را در Agiflow ثبت کنید."
+    message=update.get("message") or {}
+    text=(message.get("text") or "").strip()
+    rest=text[len(text.split()[0]):].strip() if text.split() else ""
+    parts=[part.strip() for part in rest.split("|")]
+    if len(parts)!=3 or not all(parts) or not re.fullmatch(r"AAX-[1-9][0-9]{0,7}",parts[0]):
+        return "برای ثبت تصمیم بنویسید:\n/decision AAX-36 | تصمیم | دلیل\nفقط متن قابل انتشار در Agiflow را وارد کنید."
+    request={"task":parts[0],"decision":parts[1],"rationale":parts[2],
+             "update_id":update.get("update_id"),"date":message.get("date"),
+             "user_id":(message.get("from") or {}).get("id"),
+             "chat_id":(message.get("chat") or {}).get("id")}
+    raw=json.dumps(request,ensure_ascii=False).encode("utf-8")+b"\n"
+    if len(raw)>16384:
+        return "متن تصمیم و دلیل طولانی است. هر بخش را به کمتر از ۲۰۰۰ نویسه کوتاه کنید."
+    try:
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+            client.settimeout(40)
+            client.connect(DECISION_SOCKET)
+            client.sendall(raw)
+            with client.makefile("rb") as stream: reply=stream.readline(4097)
+        if len(reply)>4096 or not reply.endswith(b"\n"): raise ValueError()
+        def unique(items):
+            result={}
+            for key,value in items:
+                if key in result: raise ValueError()
+                result[key]=value
+            return result
+        result=json.loads(reply,object_pairs_hook=unique)
+        if not isinstance(result,dict): raise ValueError()
+        if result.get("status")=="QUEUED":
+            if (set(result)!={"status","reference","task"} or result["task"]!=parts[0] or
+                    not isinstance(result["reference"],str) or
+                    not re.fullmatch(r"ada-decision:[0-9a-f]{64}",result["reference"])):
+                raise ValueError()
+            return "درخواست ثبت تصمیم در صف است؛ ثبت نهایی در Agiflow هنوز تأیید نشده."
+        error=result.get("error")
+        if result.get("status")!="REJECTED" or not isinstance(error,str): raise ValueError()
+        if error in {"UPSTREAM_UNAVAILABLE","REQUEST_FAILED","UPSTREAM_RESPONSE_INVALID",
+                     "AGIFLOW_READ_INVALID","UPSTREAM_RESPONSE_TOO_LARGE"}:
+            raise ValueError()
+        if error=="DISABLED":
+            return "ثبت تصمیم فعلاً فعال نیست. تصمیم را در Agiflow ثبت کنید."
+        if error in {"RECEIPT_MISMATCH","QUEUE_REQUIRES_REVIEW"}:
+            return "وضعیت این درخواست نیاز به بررسی دارد. پیش از ارسال دوباره، سابقه همان کار را در Agiflow بررسی کنید."
+        if error=="REQUEST_EXPIRED":
+            return "این درخواست قدیمی است. ابتدا سابقه همان کار را در Agiflow بررسی کنید."
+        return "درخواست ثبت تصمیم پذیرفته نشد. شناسه کار و متن تصمیم را بررسی کنید؛ هیچ ثبت نهایی تأیید نشده."
+    except Exception:
+        # Never persist provider/socket diagnostics or command text in inbound.last_error.
+        raise RuntimeError("decision_gateway_unavailable") from None
+
+
 def chat_with_ada(text):
     if len(text)>8000: raise ValueError("message_too_long")
     history="\n".join(f"{role}: {content}" for role,content in CHAT_HISTORY[-8:])
@@ -298,6 +386,7 @@ HELP=(
     "/health — وضعیت صف‌ها و آمادگی سرویس\n"
     "/tasks — کارهای فعال پروژه Ada/زیرساخت\n"
     "/blocked — کارهای مسدودشده پروژه Ada/زیرساخت\n"
+    "/decision — ثبت تصمیم و دلیل برای یک کار در Agiflow\n"
     "/alerttest — تست مسیر هشدار\n"
     "/feedback — ثبت اصلاح زبانی برای بررسی بعدی\n"
     "/feedbackstatus — تعداد بازخوردهای ثبت‌شده\n"
@@ -360,12 +449,18 @@ def handle(update):
         return
     if int(chat_id)!=int(ident["chat_id"]) or int(user_id)!=int(ident["user_id"]):
         log("unauthorised_message_denied",level="warning",chat_id=chat_id,user_id=user_id); return
-    if not rate_allowed(user_id):
-        send(chat_id,"تعداد درخواست‌ها در این دقیقه زیاد شده. کمی بعد دوباره امتحان کنید."); log("rate_limited",level="warning",chat_id=chat_id,user_id=user_id); return
 
     command=text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if KILL_SWITCH.exists() and command not in ("/ping","/health","/help","/start"):
-        send(chat_id,"دستورهای ورودی موقتاً غیرفعال شده‌اند."); return
+    if command=="/decision":
+        if KILL_SWITCH.exists():
+            send(chat_id,"دستورهای ورودی موقتاً غیرفعال شده‌اند."); return
+        if not decision_rate_allowed(user_id,update):
+            send(chat_id,"تعداد درخواست‌ها در این دقیقه زیاد شده. کمی بعد دوباره امتحان کنید."); log("rate_limited",level="warning",chat_id=chat_id,user_id=user_id); return
+    else:
+        if not rate_allowed(user_id):
+            send(chat_id,"تعداد درخواست‌ها در این دقیقه زیاد شده. کمی بعد دوباره امتحان کنید."); log("rate_limited",level="warning",chat_id=chat_id,user_id=user_id); return
+        if KILL_SWITCH.exists() and command not in ("/ping","/health","/help","/start"):
+            send(chat_id,"دستورهای ورودی موقتاً غیرفعال شده‌اند."); return
 
     if command in ("/start","/help"): send(chat_id,HELP)
     elif command=="/ping": send(chat_id,"pong")
@@ -380,6 +475,7 @@ def handle(update):
         except Exception as exc:
             log("agiflow_read_failed",level="warning",error_type=type(exc).__name__)
             send(chat_id,"فعلاً خواندن وضعیت Agiflow ممکن نیست؛ کمی بعد دوباره امتحان کنید.")
+    elif command=="/decision": send(chat_id,queue_decision(update))
     elif command=="/id": send(chat_id,f"chat ID: {chat_id}\nuser ID: {user_id}")
     elif command=="/alerttest":
         qid=enqueue_alert("End-to-end AdaLLMbot alert path test.",idem_key=f"alerttest:{update.get('update_id')}",severity="info",source="AdaLLMbot")
@@ -415,7 +511,7 @@ def handle(update):
             send(chat_id,"فعلاً ارتباط با هسته گفت‌وگو برقرار نیست. کمی بعد دوباره امتحان کنید.")
 
     known_commands={"/start","/help","/ping","/status","/health","/tasks","/blocked",
-                    "/id","/alerttest","/feedbackstatus","/feedback"}
+                    "/id","/alerttest","/feedbackstatus","/feedback","/decision"}
     command_category=command if command in known_commands else ("unknown" if command else "chat")
     log("command_handled",command=command_category,chat_id=chat_id,user_id=user_id,update_id=update.get("update_id"))
 
@@ -455,6 +551,7 @@ def process_pending(limit=50):
 def prune_history():
     with db() as c:
         c.execute("DELETE FROM inbound WHERE state='done' AND update_id NOT IN (SELECT update_id FROM inbound WHERE state='done' ORDER BY update_id DESC LIMIT 1000)")
+        c.execute("DELETE FROM decision_admission WHERE update_id NOT IN (SELECT update_id FROM inbound)")
         c.execute("DELETE FROM rate_events WHERE ts<?",(int(time.time())-3600,))
 
 def heartbeat(bot_username=None,state="running"):

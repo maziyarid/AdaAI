@@ -1,0 +1,29 @@
+[Unit]
+Description=Ada scoped operator decision gateway
+After=network-online.target
+Documentation=file:/opt/ada-decision-gateway/README.md
+
+[Service]
+Type=simple
+User=ada-decision-gateway
+Group=adabot
+UMask=0007
+EnvironmentFile=/etc/ada-decision-gateway.env
+ExecStart=/usr/bin/python3 /opt/ada-decision-gateway/gateway.py
+RuntimeDirectory=ada-decision-gateway
+RuntimeDirectoryMode=0750
+Restart=no
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=128M
+TasksMax=16

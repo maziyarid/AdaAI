@@ -28,3 +28,11 @@ jobs:
         run: python -c "from ada_reliability import AdaEngine, seed_phase1; print('ok', AdaEngine, seed_phase1)"
       - name: Pytest
         run: python -m pytest -q
+      - name: Operations regressions
+        working-directory: .
+        env:
+          PYTHONPATH: ada-reliability/src
+        run: python -m pytest ops -q
+      - name: Context core contracts
+        working-directory: ada-context-core
+        run: python -m pytest -q

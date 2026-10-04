@@ -65,3 +65,17 @@ Feedback dataset release v2:
 - Rejection/removal affects future exports. Published manifests and files remain immutable; withdrawal of already-distributed data requires a separately tracked recall.
 
 - If parent-directory sync fails after publication, the exporter reports a fixed 'publication durability is unconfirmed' diagnostic. The complete immutable release is preserved. Verify its manifest and storage durability before using it; do not overwrite the version or infer durable success from its presence alone.
+
+Operator decision notes:
+- /decision AAX-36 | decision | rationale uses the separately gated Unix-socket gateway. Both bot and gateway default ADA_DECISIONS_ENABLED=false. See ../agiflow-decision-gateway/README.md in source (installed gateway docs: /opt/ada-decision-gateway/README.md).
+- A queue receipt does not mean Agiflow delivery. Preserve the original inbound update on uncertain transport errors; reconcile before creating a new command. Never add provider/core credentials to the bot environment.
+
+### Feedback email privacy
+
+New explicit feedback redacts email addresses regardless of case in the original,
+preferred wording and rationale. Exports refuse approved historical rows that
+still contain a matching email address, before any release is created. Review
+and reject affected entries through the protected feedback administration path;
+capture a corrected example and approve it separately. Existing rows and immutable
+dataset releases are not automatically rewritten. The email guard is a bounded
+pattern check and does not replace human privacy review for other sensitive data.

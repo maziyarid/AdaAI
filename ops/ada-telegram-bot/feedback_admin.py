@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, hashlib, json, os, shutil, sqlite3, sys, tempfile, unicodedata
+import argparse, fcntl, hashlib, json, os, re, shutil, sqlite3, sys, tempfile, unicodedata
 from pathlib import Path
 
 STATE=Path(os.environ.get("STATE_DIR","/var/lib/ada-telegram-bot"))
@@ -74,6 +74,12 @@ def export(version):
     groups={"train":[],"dev":[],"eval":[]}
     for r in rows:
         d=dict(r)
+        # Older captures could retain lowercase emails. Require renewed review
+        # rather than silently changing an approved example or its split identity.
+        if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+                         str(d.get(field) or ""), re.IGNORECASE)
+               for field in ("original","preferred","reason")):
+            raise SystemExit("approved feedback requires privacy review before export")
         d["split_group"]=split_group(d["original"])
         d["split"]=bucket(d["split_group"])
         groups[d["split"]].append(d)
@@ -99,7 +105,7 @@ def export(version):
           "dataset":"ada-qalam-feedback","version":version,"immutable":True,
           "policy":"explicit-feedback-only; approved-only; normalised-original group split; no automatic promotion",
           "split_policy":"sha256-nfkc-casefold-whitespace-original/v1",
-          "redaction_policy":"capture-time automated redaction; human approval required",
+          "redaction_policy":"capture-time automated redaction; export-time email guard; human approval required",
           "files":files,"source_db":str(DB),"record_count":len(rows),
           "qalam_versions":sorted(set(r["qalam_version"] for r in rows))
         }

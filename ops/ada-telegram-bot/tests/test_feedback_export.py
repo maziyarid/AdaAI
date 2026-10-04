@@ -58,6 +58,28 @@ class FeedbackExportTests(unittest.TestCase):
                 result.extend(json.loads(line) for line in f if line.strip())
         return result
 
+    def test_capture_redacts_email_case_in_all_feedback_fields(self):
+        fid=self.bot.store_feedback("naturalness","contact alice@example.test",
+            "contact Alice@example.test","contact ALICE@EXAMPLE.TEST",123,42)
+        with self.bot.db() as c:
+            row=c.execute("SELECT original,preferred,reason FROM feedback WHERE id=?",(fid,)).fetchone()
+        self.assertIsNotNone(row)
+        for field in ("original","preferred","reason"):
+            self.assertNotIn("@",row[field])
+            self.assertIn("[EMAIL_REDACTED]",row[field])
+
+    def test_legacy_email_blocks_export_before_creating_release(self):
+        for field in ("original","preferred","reason"):
+            with self.subTest(field=field):
+                with self.bot.db() as c:
+                    c.execute("DELETE FROM feedback")
+                fid=self.seed()
+                with self.bot.db() as c:
+                    c.execute("UPDATE feedback SET "+field+"=? WHERE id=?",("alice@example.test",fid))
+                with self.assertRaisesRegex(SystemExit,"privacy review"):
+                    self.export("legacy-email-"+field)
+                self.assertFalse((self.admin.DATASETS/("legacy-email-"+field)).exists())
+
     def test_only_approved_explicit_feedback_is_exported(self):
         approved=self.seed()
         self.seed(preferred="Pending",status="pending_review")
