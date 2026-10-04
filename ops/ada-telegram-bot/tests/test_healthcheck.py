@@ -204,6 +204,73 @@ class BotHealthTests(unittest.TestCase):
         result = self.assert_unhealthy()
         self.assertIn("heartbeat_invalid", result["errors"])
 
+    def test_status_nesting_over_64_containers_fails_closed(self):
+        # Root object plus 64 arrays exceeds the explicit application limit,
+        # independently of the interpreter's JSON recursion allowance.
+        nested = "[" * 64 + "0" + "]" * 64
+        for name, value, category in (
+            ("ready.json", self.ready, "readiness_invalid"),
+            ("heartbeat.json", self.heartbeat, "heartbeat_invalid"),
+        ):
+            with self.subTest(name=name):
+                self.write_status()
+                text = json.dumps(value)[:-1] + ', "unused":' + nested + "}"
+                path = self.state / name
+                path.write_text(text)
+                result = self.assert_unhealthy()
+                self.assertIn(category, result["errors"])
+                self.assertEqual(path.read_text(), text)
+
+    def test_status_nesting_at_64_containers_is_accepted(self):
+        nested = "[" * 63 + "0" + "]" * 63
+        text = json.dumps(self.ready)[:-1] + ', "unused":' + nested + "}"
+        (self.state / "ready.json").write_text(text)
+        code, result = self.check()
+        self.assertEqual(code, 0)
+        self.assertTrue(result["ok"])
+
+    def test_mixed_object_array_nesting_is_bounded(self):
+        nested = '{"a":[' * 32 + "0" + "]}" * 32
+        text = json.dumps(self.heartbeat)[:-1] + ', "unused":' + nested + "}"
+        (self.state / "heartbeat.json").write_text(text)
+        result = self.assert_unhealthy()
+        self.assertIn("heartbeat_invalid", result["errors"])
+
+    def test_brackets_in_status_strings_do_not_count_as_nesting(self):
+        self.ready["unused"] = ('[{"escaped": "\\"}]' * 100)
+        self.write_status()
+        code, result = self.check()
+        self.assertEqual(code, 0)
+        self.assertTrue(result["ok"])
+
+    def test_duplicate_keys_cannot_hide_overdeep_status_values(self):
+        for name, value, category in (
+            ("ready.json", self.ready, "readiness_invalid"),
+            ("heartbeat.json", self.heartbeat, "heartbeat_invalid"),
+        ):
+            for depth in (64, 1200):
+                with self.subTest(name=name, depth=depth):
+                    self.write_status()
+                    nested = "[" * depth + "0" + "]" * depth
+                    text = json.dumps(value)[:-1] + ', "unused":' + nested + ', "unused":0}'
+                    path = self.state / name
+                    path.write_text(text)
+                    self.assertLess(len(text.encode()), 4096)
+                    result = self.assert_unhealthy()
+                    self.assertIn(category, result["errors"])
+                    self.assertEqual(path.read_text(), text)
+
+    def test_duplicate_status_members_fail_closed_at_every_depth(self):
+        for suffix in (
+            ', "pid":' + str(self.pid) + "}",
+            ', "\\u0070id":' + str(self.pid) + "}",
+            ', "unused":{"name":1,"name":2}}',
+        ):
+            with self.subTest(suffix=suffix):
+                (self.state / "ready.json").write_text(json.dumps(self.ready)[:-1] + suffix)
+                result = self.assert_unhealthy()
+                self.assertIn("readiness_invalid", result["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()

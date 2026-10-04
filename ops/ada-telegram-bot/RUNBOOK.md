@@ -43,6 +43,7 @@ Health inspection:
 - A degraded process is visible as state=degraded; exit 0 is not proof that Telegram or Agiflow end-to-end delivery works.
 - database_ok and process_alive are explicit. Unavailable queue counts are null rather than a misleading zero. errors contains fixed categories only, never raw exception text or state contents.
 - Future/invalid heartbeat epochs, mismatched PIDs, malformed/oversized status files and missing/corrupt/schema-incomplete databases fail closed.
+- Status JSON is limited to 4096 bytes and 64 nested object/array containers, counting the root object as one. Duplicate member names are rejected at every object depth before they can hide an earlier value. This explicit nesting limit is independent of the Python decoder's recursion allowance; brackets inside strings do not count. Files are never rewritten during validation.
 - Read-only connections include committed WAL transactions. SQLite may maintain its normal WAL shared-memory bookkeeping; the checker does not execute state writes. Database lock waits and query work each have a two-second budget.
 
 Offline state recovery proof:
