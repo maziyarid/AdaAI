@@ -239,3 +239,20 @@ def test_control_core_receipt_parser_remains_json_only():
             core.enqueue({'fixture':True})
     finally:
         http.shutdown();http.server_close()
+
+def test_gateway_service_recovers_failures_without_infinite_clean_exit_loop():
+    unit=(HERE/'ada-decision-gateway.service').read_text()
+    assert 'Restart=on-failure' in unit
+    assert 'RestartSec=5s' in unit
+    assert 'StartLimitIntervalSec=300' in unit
+    assert 'StartLimitBurst=5' in unit
+    assert 'Restart=always' not in unit
+
+def test_installer_rejects_unsafe_preexisting_gateway_account_contract():
+    script=(HERE/'install.sh').read_text()
+    assert '[ "$gateway_uid" -ne 0 ]' in script
+    assert '[ "$gateway_gid" -eq "$expected_gid" ]' in script
+    assert 'Gateway account must use a non-login shell.' in script
+    assert '[ "$gateway_groups" = "$expected_gid" ]' in script
+    assert 'Gateway UID must not be shared.' in script
+
