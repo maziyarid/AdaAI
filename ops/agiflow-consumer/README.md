@@ -84,3 +84,25 @@ is repaired. Rolling back code is not permission to resume the defective loop.
 pytest ops/agiflow-consumer/tests
 Tests use isolated fakes/subprocesses; no production claim, ACK or comment occurs.
 Live delivery and production restart/replay remain separate acceptance gates.
+
+## Receipt evidence and concurrent edits
+
+A stable marker identifies the intended operation; it does not establish that
+its original content was delivered. Both replay and post-create verification
+now compare the entire observed comment body with the queued body. A mismatch
+is a durable conflict requiring operator review. The consumer never overwrites
+the changed comment or creates a replacement under a new marker.
+
+MCP structuredContent is preferred over presentation text. Missing/non-object
+payloads, malformed comments, foreign task IDs and invalid totals cannot prove
+an empty history or authorise a create. Plain JSON text responses remain supported.
+A changed total or repeated comment ID makes offset pagination unstable; the
+queue item is quarantined, even when an exact marker was seen. Normal bounded
+scans stopped only by size or lease budget retain their existing observed-marker
+reconciliation behaviour.
+
+This is conservative readback, not remote atomic compare-and-swap. Offset
+pagination without a provider snapshot can miss simultaneous changes with the
+same total and no repeated IDs; a comment can also change after readback. Existing
+single-owner/lease requirements remain essential. This patch does not establish
+writer identity from a copied marker, implement task updates, or activate AAX-24.

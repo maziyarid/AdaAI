@@ -244,12 +244,12 @@ class StatelessAgiflowMcpClient:
     @staticmethod
     def _tool_payload(result: dict[str, Any]) -> Any:
         if result.get("isError"):
-            text = " ".join(
-                str(x.get("text") or "")
-                for x in result.get("content") or []
-                if isinstance(x, dict)
-            )
             raise ConnectorError("MCP_TOOL_ERROR")
+        if "structuredContent" in result:
+            payload = result["structuredContent"]
+            if not isinstance(payload, dict):
+                raise ConnectorError("MCP_TOOL_INVALID_OBJECT")
+            return payload
         texts = [
             x.get("text")
             for x in result.get("content") or []
@@ -258,11 +258,14 @@ class StatelessAgiflowMcpClient:
             and isinstance(x.get("text"), str)
         ]
         if not texts:
-            return {}
+            raise ConnectorError("MCP_TOOL_PAYLOAD_MISSING")
         try:
-            return json.loads(texts[0])
+            payload = json.loads(texts[0])
         except json.JSONDecodeError as exc:
             raise ConnectorError("MCP_TOOL_INVALID_JSON") from exc
+        if not isinstance(payload, dict):
+            raise ConnectorError("MCP_TOOL_INVALID_OBJECT")
+        return payload
 
     def _call_tool(self, request_id: int, name: str, arguments: dict[str, Any]) -> Any:
         result = self._rpc(
@@ -286,6 +289,8 @@ class StatelessAgiflowMcpClient:
         comments: list[dict[str, Any]] = []
         offset = 0
         complete = False
+        seen_ids: set[str] = set()
+        first_total: int | None = None
         reason = "COMMENT_SCAN_LIMIT_EXCEEDED"
         while offset < MAX_COMMENT_SCAN:
             if ensure_page_budget is not None:
@@ -309,20 +314,40 @@ class StatelessAgiflowMcpClient:
             )
             if not isinstance(page, dict):
                 raise ConnectorError("COMMENTS_RESPONSE_INVALID")
-            batch = page.get("comments") or []
+            batch = page.get("comments")
             if not isinstance(batch, list):
                 raise ConnectorError("COMMENTS_LIST_INVALID")
             if len(batch) > COMMENT_PAGE_SIZE:
                 raise ConnectorError("COMMENTS_PAGE_LIMIT_INVALID")
-            comments.extend(x for x in batch if isinstance(x, dict))
             total = page.get("total")
+            if type(total) is not int or total < 0 or total < len(batch):
+                raise ConnectorError("COMMENTS_TOTAL_INVALID")
+            # Never discard invalid evidence and then claim the history is empty.
+            for row in batch:
+                if (not isinstance(row, dict) or
+                        not isinstance(row.get("id"), str) or not row["id"].strip() or
+                        not isinstance(row.get("content"), str) or
+                        ("taskId" in row and row["taskId"] != task_id)):
+                    raise ConnectorError("COMMENTS_ROW_INVALID")
+            if first_total is None:
+                first_total = total
+            ids = [row["id"] for row in batch]
+            unstable = (total != first_total or len(set(ids)) != len(ids) or
+                        bool(seen_ids.intersection(ids)) or offset + len(batch) > total)
+            # Retain unique observations for reconciliation, but a moving history
+            # cannot establish absence and must never authorise a new write.
+            for row in batch:
+                if row["id"] not in seen_ids:
+                    comments.append(row)
+                    seen_ids.add(row["id"])
+            if unstable:
+                reason = "COMMENT_SCAN_UNSTABLE"
+                break
             offset += len(batch)
-            if type(total) is int:
-                if offset >= total:
-                    complete = True
-                    break
+            if offset == total:
+                complete = True
+                break
             if len(batch) < COMMENT_PAGE_SIZE:
-                complete = type(total) is not int
                 break
         return CommentScan(comments, complete=complete, reason=reason)
 
@@ -477,6 +502,17 @@ def _quarantine_incomplete_scan(core, item, parsed, phase, *, mirror,
             "failure_scope": "queue", "ack": ack}
 
 
+def _content_conflict(core, item, parsed, row, phase, *, mirror):
+    # The marker identifies an operation; it is not proof of the intended result.
+    # Preserve changed human/provider content and retain the obligation for review.
+    if row.get("content") == parsed["content"]:
+        return None
+    reason = "DURABLE_MARKER_CONTENT_MISMATCH"
+    ack = _ack_and_mirror(core, item, parsed, "conflict", error=reason, mirror=mirror)
+    return {"status": "CONFLICT", "claimed": True, "phase": phase,
+            "reason": reason, "owner_action_required": True, "ack": ack}
+
+
 def consume_one(
     core: CoreClient,
     agiflow: AgiflowClient,
@@ -518,6 +554,9 @@ def consume_one(
     except Exception as exc:
         return _retry_after_error(core, item, parsed, exc, "precheck", mirror=mirror)
 
+    if getattr(before, "reason", None) == "COMMENT_SCAN_UNSTABLE":
+        return _quarantine_incomplete_scan(core, item, parsed, "precheck", mirror=mirror,
+                                          reason="COMMENT_SCAN_UNSTABLE")
     matches = _comment_marker_matches(before, marker)
     if len(matches) > 1:
         ack = _ack_and_mirror(
@@ -535,6 +574,9 @@ def consume_one(
             "ack": ack,
         }
     if len(matches) == 1:
+        conflict = _content_conflict(core, item, parsed, matches[0], "precheck", mirror=mirror)
+        if conflict:
+            return conflict
         observed = _comment_id(matches[0])
         if not observed:
             ack = _ack_and_mirror(
@@ -582,6 +624,9 @@ def consume_one(
     except Exception as exc:
         return _retry_after_error(core, item, parsed, exc, "verify", mirror=mirror)
 
+    if getattr(after, "reason", None) == "COMMENT_SCAN_UNSTABLE":
+        return _quarantine_incomplete_scan(core, item, parsed, "verify", mirror=mirror,
+                                          reason="COMMENT_SCAN_UNSTABLE")
     matches = _comment_marker_matches(after, marker)
     if len(matches) == 0:
         if not getattr(after, "complete", True):
@@ -617,6 +662,9 @@ def consume_one(
             "ack": ack,
         }
 
+    conflict = _content_conflict(core, item, parsed, matches[0], "verify", mirror=mirror)
+    if conflict:
+        return conflict
     observed = _comment_id(matches[0])
     if not observed:
         ack = _ack_and_mirror(

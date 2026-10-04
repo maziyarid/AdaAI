@@ -345,7 +345,7 @@ def test_failed_reset_probe_preserves_permanent_latch(tmp_path):
 @pytest.mark.parametrize("matching", [True, False])
 def test_large_comment_history_reconciles_seen_marker_without_unsafe_create(monkeypatch, matching):
     client = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
-    rows = [{"id": "existing1", "content": "[sync:event1]" if matching else "other"}]
+    rows = [{"id": "existing1", "content": "fact [sync:event1]" if matching else "other"}]
     def call(request_id, name, args):
         if name == "list_task_comments":
             return {"comments": rows, "total": 10000}
@@ -471,9 +471,9 @@ def test_slow_pagination_reserves_quarantine_ack_lease(monkeypatch, postcreate, 
             return {"comments": [], "total": 0}
         state["pages"] += 1
         clock[0] += page_seconds
-        rows = [{"id": str(i), "content": "other"} for i in range(100)]
+        rows = [{"id": str(args["offset"] + i), "content": "other"} for i in range(100)]
         if matching and state["pages"] == 1:
-            rows[0] = {"id": "observed", "content": "[sync:event1]"}
+            rows[0] = {"id": "observed", "content": "fact [sync:event1]"}
         return {"comments": rows, "total": 6000}
     monkeypatch.setattr(adapter, "_call_tool", call)
     result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
@@ -489,3 +489,119 @@ def test_slow_pagination_reserves_quarantine_ack_lease(monkeypatch, postcreate, 
     pages = state["pages"]
     assert consumer.consume_one(core, adapter, enabled=True, mirror=False)["status"] == "NO_ELIGIBLE_UNIT"
     assert state["pages"] == pages
+
+@pytest.mark.parametrize("postcreate", [False, True])
+def test_marker_with_changed_content_is_conflict_not_delivery(postcreate):
+    core, adapter = Core(), Agiflow()
+    changed = {"id": "comment1", "content": "human correction [sync:event1]"}
+    if postcreate:
+        def create(task_id, content):
+            adapter.writes += 1
+            adapter.rows.append(changed)
+            return changed
+        adapter.create_comment = create
+    else:
+        adapter.rows = [changed]
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == "CONFLICT"
+    assert result["reason"] == "DURABLE_MARKER_CONTENT_MISMATCH"
+    assert core.acks[-1][1] == "conflict"
+    assert adapter.rows == [changed]  # Never overwrite the human's edit.
+    assert adapter.writes == int(postcreate)
+    assert "human correction" not in json.dumps(result)
+
+
+def test_lost_create_then_human_edit_cannot_be_acknowledged_as_original():
+    core, adapter = Core(), Agiflow()
+    adapter.lost_create_response = True
+    assert consumer.consume_one(core, adapter, enabled=True, mirror=False)["status"] == "RETRYABLE"
+    adapter.rows[0]["content"] = "changed after uncertain write [sync:event1]"
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == "CONFLICT"
+    assert adapter.writes == 1
+    assert core.acks[-1][1] == "conflict"
+
+
+@pytest.mark.parametrize("page", [
+    {}, {"total": 0}, {"comments": None, "total": 0},
+    {"comments": False, "total": 0},
+    {"comments": [None], "total": 1},
+    {"comments": [{"id": "one"}], "total": 1},
+    {"comments": [{"content": "text"}], "total": 1},
+    {"comments": [{"id": "one", "content": 42}], "total": 1},
+    {"comments": [{"id": "one", "content": "text", "taskId": "another-task"}], "total": 1},
+    {"comments": [], "total": -1}, {"comments": [], "total": True},
+    {"comments": [], "total": "0"},
+    {"comments": [{"id": "one", "content": "text"}], "total": 0},
+])
+def test_malformed_history_never_authorises_a_new_comment(monkeypatch, page):
+    core = Core()
+    adapter = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
+    monkeypatch.setattr(adapter, "probe", lambda: {"ok": True})
+    writes = []
+    def call(request_id, name, args):
+        if name == "create_task_comment":
+            writes.append(args)
+            return {"id": "unexpected"}
+        return page
+    monkeypatch.setattr(adapter, "_call_tool", call)
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert writes == [], "malformed history allowed a write"
+    assert result["status"] == "RETRYABLE"
+    assert core.acks[-1][1] == "retry"
+
+
+def test_structured_mcp_payload_is_used_before_display_text():
+    payload = {"comments": [{"id": "one", "content": "fact [sync:event1]"}], "total": 1}
+    result = {"structuredContent": payload, "content": [{"type": "text", "text": "Action completed."}]}
+    assert consumer.StatelessAgiflowMcpClient._tool_payload(result) == payload
+
+
+@pytest.mark.parametrize("result", [
+    {"content": []},
+    {"structuredContent": None, "content": []},
+    {"structuredContent": [], "content": [{"type": "text", "text": "{}"}]},
+])
+def test_missing_or_malformed_mcp_payload_is_not_an_empty_history(result):
+    with pytest.raises(consumer.ConnectorError):
+        consumer.StatelessAgiflowMcpClient._tool_payload(result)
+
+
+def test_tool_error_does_not_accept_successful_looking_structured_payload():
+    with pytest.raises(consumer.ConnectorError, match="MCP_TOOL_ERROR"):
+        consumer.StatelessAgiflowMcpClient._tool_payload({
+            "isError": True, "structuredContent": {"comments": [], "total": 0}})
+
+
+def test_repeated_comment_ids_cannot_complete_an_offset_scan(monkeypatch):
+    adapter = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
+    rows = [{"id": str(i), "content": "other"} for i in range(100)]
+    monkeypatch.setattr(adapter, "_call_tool", lambda *args: {"comments": rows, "total": 200})
+    result = adapter.list_comments("task1")
+    assert result.complete is False
+    assert result.reason == "COMMENT_SCAN_UNSTABLE"
+
+@pytest.mark.parametrize("postcreate", [False, True])
+def test_unstable_history_cannot_reconcile_even_a_seen_exact_marker(postcreate):
+    core, adapter = Core(), Agiflow()
+    exact = {"id": "one", "content": "fact [sync:event1]"}
+    unstable = consumer.CommentScan([exact], complete=False, reason="COMMENT_SCAN_UNSTABLE")
+    scans = iter([consumer.CommentScan([], complete=True), unstable] if postcreate else [unstable])
+    adapter.list_comments = lambda task_id, ensure_page_budget=None: next(scans)
+    result = consumer.consume_one(core, adapter, enabled=True, mirror=False)
+    assert result["status"] == "QUARANTINED"
+    assert result["reason"] == "COMMENT_SCAN_UNSTABLE"
+    assert core.acks[-1][1] == "quarantined"
+    assert adapter.writes == int(postcreate)
+
+
+def test_total_change_marks_comment_history_unstable(monkeypatch):
+    adapter = consumer.StatelessAgiflowMcpClient("https://example.invalid", "fixture")
+    pages = iter([
+        {"comments": [{"id": str(i), "content": "other"} for i in range(100)], "total": 101},
+        {"comments": [{"id": "100", "content": "other"}], "total": 102},
+    ])
+    monkeypatch.setattr(adapter, "_call_tool", lambda *args: next(pages))
+    result = adapter.list_comments("task1")
+    assert result.complete is False
+    assert result.reason == "COMMENT_SCAN_UNSTABLE"
