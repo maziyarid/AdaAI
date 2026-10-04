@@ -9,6 +9,7 @@ import time
 
 STATE = Path("/var/lib/ada-telegram-bot")
 MAX_STATUS_BYTES = 4096
+MAX_STATUS_DEPTH = 64
 DATABASE_BUDGET_SECONDS = 2.0
 
 
@@ -34,6 +35,17 @@ def open_regular_no_follow(path):
         raise
 
 
+def unique_status_object(pairs):
+    # Do not discard earlier values before depth validation, or a duplicate
+    # member could conceal an overdeep value (including escaped key spellings).
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate status member")
+        result[key] = value
+    return result
+
+
 def read_status(path):
     fd, _ = open_regular_no_follow(path)
     with os.fdopen(fd, "rb", closefd=True) as stream:
@@ -41,11 +53,22 @@ def read_status(path):
     if len(data) > MAX_STATUS_BYTES:
         raise ValueError("status too large")
     try:
-        result = json.loads(data)
+        result = json.loads(data, object_pairs_hook=unique_status_object)
     except RecursionError:
         raise ValueError("status nesting invalid") from None
     if not isinstance(result, dict):
         raise ValueError("status is not an object")
+    # Decoder recursion allowances differ between Python versions/builds.
+    # Enforce our own bound without recursing or changing global interpreter
+    # limits. The existing byte cap also bounds the size of this worklist.
+    pending = [(result, 1)]
+    while pending:
+        value, depth = pending.pop()
+        if isinstance(value, (dict, list)):
+            if depth > MAX_STATUS_DEPTH:
+                raise ValueError("status nesting invalid")
+            children = value.values() if isinstance(value, dict) else value
+            pending.extend((child, depth + 1) for child in children)
     return result
 
 
