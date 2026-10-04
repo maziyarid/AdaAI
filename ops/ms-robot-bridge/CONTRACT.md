@@ -40,6 +40,63 @@ Do not put credentials, OTPs, raw authentication headers, private keys, medical 
 queued -> delivered -> acked.
 A failed consumer can return fail; bounded failures eventually park the event as dead. No event is considered processed from silence alone.
 
+### Scoped bounded listing
+
+Authenticated `GET /v1/events` accepts an optional exact `project_key` and
+`site_key` pair alongside target/state/limit. Both scope fields must occur once,
+be nonblank, contain no control characters or surrounding whitespace, and fit
+160 characters. Partial, blank, repeated or malformed scopes return 400.
+Filtering happens before the existing bounded limit, so another tenant's backlog
+cannot starve scoped intake. A scoped response confirms the exact pair in
+`scope`; requests without either field retain the existing global response.
+Scope is a consumer selection boundary, not a new credential or approval grant.
+
+Transition paths percent-decode the event ID after splitting the raw path into
+segments. Stable reference IDs containing a colon or slash remain addressable
+when properly encoded; SQL continues to use parameterised identity lookup.
+Authentication, queue states, attempt budgets and execution authority are
+unchanged. Old bridge installations without a confirmed scoped-list capability
+must not be used for the new tenant-scoped consumer.
+
+### Exact event confirmation
+
+Authenticated `GET /v1/events/<encoded-event-id>` requires one valid `target`
+and the exact `project_key`/`site_key` pair. It returns `event` with the existing
+public envelope fields and confirms the pair in `scope`. It can address queued,
+delivered, acked and dead events, including an ACK whose response was lost.
+Missing and out-of-scope identities both return 404. Malformed scope/target
+returns 400; authentication precedes any identity lookup. The endpoint does not
+change event state, attempts or timestamps and never returns `last_error`.
+
+The consumer uses this lookup only for its bounded, durable pending receipts.
+It validates the complete returned envelope and compares its canonical identity
+fingerprint with the stored receipt before confirming an `acked` state locally.
+Matching queued/delivered records may resume the ordinary receipt-first lifecycle.
+Missing, changed, dead, malformed or unavailable records remain unconfirmed and
+receive no transition from reconciliation. An ACK never grants action authority.
+Legacy installations lacking this endpoint cannot automatically reconcile an
+uncertain ACK; they must retain the receipt and require operator verification.
+
+### Atomic transitions and terminal states
+
+Each authenticated transition serializes its identity read and update in one
+SQLite `BEGIN IMMEDIATE` transaction. Concurrent failure reports count separately
+and cannot overwrite each other's retry attempts. The existing attempt budget
+is unchanged; once dead, an event receives no more attempts or state changes.
+
+Acknowledged and dead states are terminal. A late delivered/fail request against
+an acked event, or any transition against a dead event, returns HTTP 409
+`event_state_conflict` without changing timestamps, attempts or error metadata.
+Repeated ACK of an acked event and repeated delivered of a delivered event return
+200 with the existing state and do not retimestamp it. ACK from queued remains
+compatible. No administrative reactivation or execution endpoint is introduced.
+
+A consumer that loses a race to another ACK keeps its durable receipt and uses
+the next bounded exact lookup to reconcile it; a transition conflict never
+permits an action or an unconditional retry. Concurrent consumption still shares
+a bridge credential and has no per-attempt worker lease, so live multi-worker
+acceptance remains a separate rollout decision.
+
 ## Repository authority and naming
 
 Canonical product name is Ms Robot. The historical repository identifier maziyarid/Canopy remains unchanged until AAX-42 completes source reconciliation.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, os, sqlite3, sys
+import argparse, fcntl, hashlib, json, os, re, shutil, sqlite3, sys, tempfile, unicodedata
 from pathlib import Path
 
 STATE=Path(os.environ.get("STATE_DIR","/var/lib/ada-telegram-bot"))
@@ -41,36 +41,98 @@ def sha(path):
         for chunk in iter(lambda:f.read(65536),b""): h.update(chunk)
     return h.hexdigest()
 
+def split_group(original):
+    """Keep revisions of the same normalised input out of different splits."""
+    normalised=" ".join(unicodedata.normalize("NFKC",original).casefold().split())
+    if not normalised:
+        raise SystemExit("approved feedback has an empty original")
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+
+def write_private(path,content):
+    with path.open("x",encoding="utf-8") as f:
+        os.fchmod(f.fileno(),0o600)
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+
+def sync_directory(path):
+    descriptor=os.open(str(path),os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
 def export(version):
     version=version.strip()
-    if not version or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in version):
+    if (not version or len(version)>128 or version.startswith(".") or
+            any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in version)):
         raise SystemExit("invalid version")
-    with conn() as c:
-        rows=c.execute("SELECT id,category,original,preferred,reason,created_at,qalam_version,fingerprint FROM feedback WHERE status='approved' ORDER BY id").fetchall()
-    if not rows: raise SystemExit("no approved feedback to export")
-    out=DATASETS/version
-    if out.exists(): raise SystemExit("dataset version already exists; exports are immutable")
-    out.mkdir(parents=True,mode=0o700)
-    groups={"train":[],"dev":[],"eval":[]}
-    for r in rows:
-        d=dict(r); d["split"]=bucket(d["fingerprint"]); groups[d["split"]].append(d)
-    files={}
-    for split,items in groups.items():
-        p=out/(split+".jsonl")
-        with p.open("w",encoding="utf-8") as f:
-            for d in items: f.write(json.dumps(d,ensure_ascii=False,sort_keys=True)+"\n")
-        os.chmod(p,0o600)
-        files[split]={"file":p.name,"count":len(items),"sha256":sha(p)}
-    manifest={
-      "dataset":"ada-qalam-feedback","version":version,"immutable":True,
-      "policy":"explicit-feedback-only; approved-only; deterministic fingerprint split; no automatic promotion",
-      "files":files,
-      "source_db":str(DB),
-      "record_count":len(rows),
-      "qalam_versions":sorted(set(r["qalam_version"] for r in rows))
-    }
-    mp=out/"manifest.json"; mp.write_text(json.dumps(manifest,ensure_ascii=False,indent=2,sort_keys=True)+"\n",encoding="utf-8"); os.chmod(mp,0o600)
-    manifest["manifest_sha256"]=sha(mp)
+    database=conn()
+    lock=None
+    stage=None
+    try:
+        # Freeze approval state until the immutable release is published. Any
+        # concurrent approval/rejection writer must wait for this transaction.
+        database.execute("BEGIN IMMEDIATE")
+        rows=database.execute("SELECT id,category,original,preferred,reason,created_at,qalam_version,fingerprint FROM feedback WHERE status='approved' ORDER BY id").fetchall()
+        if not rows:
+            raise SystemExit("no approved feedback to export")
+        groups={"train":[],"dev":[],"eval":[]}
+        for r in rows:
+            d=dict(r)
+            # Older captures could retain lowercase emails. Require renewed review
+            # rather than silently changing an approved example or its split identity.
+            if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+                             str(d.get(field) or ""), re.IGNORECASE)
+                   for field in ("original","preferred","reason")):
+                raise SystemExit("approved feedback requires privacy review before export")
+            d["split_group"]=split_group(d["original"])
+            d["split"]=bucket(d["split_group"])
+            groups[d["split"]].append(d)
+        DATASETS.mkdir(parents=True,mode=0o700,exist_ok=True)
+        os.chmod(DATASETS,0o700)
+        # The filesystem lock serializes exporters; the SQLite write transaction
+        # above additionally prevents approval state from changing mid-publication.
+        lock=os.open(str(DATASETS/".export.lock"),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        os.fchmod(lock,0o600)
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        out=DATASETS/version
+        if os.path.lexists(str(out)):
+            raise SystemExit("dataset version already exists; exports are immutable")
+        stage=Path(tempfile.mkdtemp(prefix=".export-",dir=str(DATASETS)))
+        files={}
+        for split,items in groups.items():
+            p=stage/(split+".jsonl")
+            write_private(p,"".join(json.dumps(d,ensure_ascii=False,sort_keys=True)+"\n" for d in items))
+            files[split]={"file":p.name,"count":len(items),"sha256":sha(p)}
+        manifest={
+          "schema":"ada.feedback.dataset/v2",
+          "dataset":"ada-qalam-feedback","version":version,"immutable":True,
+          "policy":"explicit-feedback-only; approved-only; normalised-original group split; no automatic promotion",
+          "split_policy":"sha256-nfkc-casefold-whitespace-original/v1",
+          "redaction_policy":"capture-time automated redaction; export-time email guard; human approval required",
+          "files":files,"source_db":str(DB),"record_count":len(rows),
+          "qalam_versions":sorted(set(r["qalam_version"] for r in rows))
+        }
+        mp=stage/"manifest.json"
+        write_private(mp,json.dumps(manifest,ensure_ascii=False,indent=2,sort_keys=True)+"\n")
+        manifest["manifest_sha256"]=sha(mp)
+        sync_directory(stage)
+        os.rename(stage,out)
+        stage=None
+        try:
+            sync_directory(DATASETS)
+        except OSError:
+            raise SystemExit("dataset is complete but publication durability is unconfirmed; verify its manifest before retry") from None
+    finally:
+        if stage is not None and stage.exists():
+            shutil.rmtree(stage)
+        if lock is not None:
+            os.close(lock)
+        try:
+            database.rollback()
+        finally:
+            database.close()
     print(json.dumps(manifest,ensure_ascii=False,indent=2,sort_keys=True))
 
 def stats():

@@ -121,5 +121,95 @@ class BotRuntimeTests(unittest.TestCase):
         self.bot.handle(self.msg(update_id=2,text="/blocked"))
         self.assertIn("AAX-33",self.sent[-1][1])
 
+    def test_plain_english_text_reaches_chat_backend(self):
+        self.pair()
+        prompts=[]
+        self.bot.chat_with_ada=lambda text:prompts.append(text) or "Ada reply"
+        self.bot.handle(self.msg(text="Please explain the current plan"))
+        self.assertEqual(prompts,["Please explain the current plan"])
+        self.assertEqual(self.sent[-1][1],"Ada reply")
+
+    def test_plain_persian_text_reaches_chat_backend(self):
+        self.pair()
+        prompts=[]
+        self.bot.chat_with_ada=lambda text:prompts.append(text) or "پاسخ Ada"
+        self.bot.handle(self.msg(text="  وضعیت کار چطور است؟  "))
+        self.assertEqual(prompts,["وضعیت کار چطور است؟"])
+        self.assertEqual(self.sent[-1][1],"پاسخ Ada")
+
+    def test_unknown_slash_command_does_not_reach_chat_backend(self):
+        self.pair()
+        self.bot.chat_with_ada=lambda _:self.fail("unknown command reached chat")
+        self.bot.handle(self.msg(text="/unknown argument"))
+        self.assertIn("/help",self.sent[-1][1])
+
+    def test_addressed_command_keeps_command_behaviour(self):
+        self.pair()
+        self.bot.chat_with_ada=lambda _:self.fail("command reached chat")
+        self.bot.handle(self.msg(text="/ping@AdaLLMbot"))
+        self.assertEqual(self.sent[-1][1],"pong")
+
+    def test_kill_switch_blocks_plain_chat(self):
+        self.pair()
+        self.bot.KILL_SWITCH.touch()
+        self.bot.chat_with_ada=lambda _:self.fail("disabled chat reached backend")
+        self.bot.handle(self.msg(text="Please continue"))
+        self.assertIn("غیرفعال",self.sent[-1][1])
+
+    def test_unpaired_or_foreign_plain_chat_does_not_reach_backend(self):
+        self.bot.chat_with_ada=lambda _:self.fail("untrusted chat reached backend")
+        self.bot.handle(self.msg(text="ordinary message"))
+        self.pair()
+        self.bot.handle(self.msg(update_id=2,user=999,text="ordinary message"))
+        self.assertEqual(self.sent,[])
+
+    def test_blank_messages_do_not_call_chat_or_reply(self):
+        self.pair()
+        self.bot.chat_with_ada=lambda _:self.fail("blank chat reached backend")
+        self.bot.handle(self.msg(text="  "))
+        self.assertEqual(self.sent,[])
+
+    def test_chat_failure_keeps_private_exception_out_of_logs(self):
+        self.pair()
+        def fail(_):
+            raise RuntimeError("PRIVATE_BACKEND_VALUE")
+        self.bot.chat_with_ada=fail
+        logs=io.StringIO()
+        with contextlib.redirect_stdout(logs):
+            self.bot.handle(self.msg(text="Hello Ada"))
+        self.assertIn("chat_backend_failed",logs.getvalue())
+        self.assertNotIn("PRIVATE_BACKEND_VALUE",logs.getvalue())
+        self.assertIn("دوباره",self.sent[-1][1])
+
+    def test_agiflow_failure_keeps_private_exception_out_of_logs(self):
+        self.pair()
+        def fail(_):
+            raise RuntimeError("PRIVATE_AGIFLOW_VALUE")
+        self.bot.agiflow_snapshot=fail
+        logs=io.StringIO()
+        with contextlib.redirect_stdout(logs):
+            self.bot.handle(self.msg(text="/tasks"))
+        self.assertIn("agiflow_read_failed",logs.getvalue())
+        self.assertNotIn("PRIVATE_AGIFLOW_VALUE",logs.getvalue())
+
+    def test_status_and_health_use_display_line_breaks(self):
+        for rendered in (self.bot.status_text(),self.bot.health_text()):
+            self.assertIn("\n",rendered)
+            self.assertNotIn("\\n",rendered)
+
+    def test_alert_prefix_uses_display_line_breaks(self):
+        self.pair()
+        self.bot.enqueue_alert("A test alert",idem_key="line-break")
+        self.bot.flush_outbox(100)
+        self.assertEqual(self.sent[-1][1],"[INFO] bot\nA test alert")
+
+    def test_unknown_command_logs_category_without_private_command_text(self):
+        self.pair()
+        logs=io.StringIO()
+        with contextlib.redirect_stdout(logs):
+            self.bot.handle(self.msg(text="/PRIVATE_COMMAND_VALUE"))
+        self.assertNotIn("private_command_value",logs.getvalue().lower())
+        self.assertIn('"command":"unknown"',logs.getvalue())
+
 if __name__=="__main__":
     unittest.main()
