@@ -256,3 +256,20 @@ def test_installer_rejects_unsafe_preexisting_gateway_account_contract():
     assert '[ "$gateway_groups" = "$expected_gid" ]' in script
     assert 'Gateway UID must not be shared.' in script
 
+def test_dangling_socket_symlink_is_rejected_without_unlinking(tmp_path):
+    path=tmp_path/'decision.sock'
+    path.symlink_to(tmp_path/'missing-target')
+    with pytest.raises(g.DecisionError,match='SOCKET_PATH_UNSAFE'):
+        g.clear_owned_socket(path,os.getuid())
+    assert path.is_symlink()
+
+def test_owned_socket_path_can_be_cleared(tmp_path):
+    path=tmp_path/'decision.sock'
+    server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+    try:
+        server.bind(str(path))
+        g.clear_owned_socket(path,os.getuid())
+        assert not path.exists() and not path.is_symlink()
+    finally:
+        server.close()
+
