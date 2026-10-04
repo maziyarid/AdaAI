@@ -7,10 +7,12 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/ops/ms-robot-bridge"
 DEST=/srv/ms-robot-bridge
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP="$DEST/backups/$TS-pre-install"
+install -d -o root -g msrobot-bridge -m 0750 "$DEST"
+install -d -o root -g root -m 0700 "$DEST/backups"
+BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-install.XXXXXX")"
+chown root:root "$BACKUP"
+chmod 0700 "$BACKUP"
 
-mkdir -p "$BACKUP"
 for f in bridge.py event-envelope.schema.json CONTRACT.md README.md; do
   [ -e "$DEST/$f" ] && cp -p "$DEST/$f" "$BACKUP/$f" || true
 done

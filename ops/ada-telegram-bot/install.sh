@@ -7,13 +7,14 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/ops/ada-telegram-bot"
 QALAM="$ROOT/skills/qalam/RELEASE.json"
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
 DEST=/opt/ada-telegram-bot
-BACKUP="$DEST/backups/$TS-pre-install"
 
 install -d -o root -g root -m 0755 "$DEST"
+install -d -o root -g root -m 0700 "$DEST/backups"
+BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-install.XXXXXX")"
+chown root:root "$BACKUP"
+chmod 0700 "$BACKUP"
 install -d -o adabot -g adabot -m 0750 /var/lib/ada-telegram-bot
-mkdir -p "$BACKUP"
 for f in bot.py check_config.py feedback_admin.py healthcheck.py send_alert.py system_prompt.txt RUNBOOK.md README.md qalam-release.json; do
   [ -e "$DEST/$f" ] && cp -p "$DEST/$f" "$BACKUP/$f" || true
 done
