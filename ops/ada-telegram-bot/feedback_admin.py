@@ -82,7 +82,7 @@ def export(version):
             d=dict(r)
             # Older captures could retain lowercase emails. Require renewed review
             # rather than silently changing an approved example or its split identity.
-            if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+            if any(re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
                              str(d.get(field) or ""), re.IGNORECASE)
                    for field in ("original","preferred","reason")):
                 raise SystemExit("approved feedback requires privacy review before export")

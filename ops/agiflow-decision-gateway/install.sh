@@ -23,8 +23,10 @@ else
   [ "$(getent passwd "$gateway_uid" | wc -l)" -eq 1 ] || { echo "Gateway UID must not be shared." >&2; exit 2; }
 fi
 install -d -o root -g root -m 0755 "$DEST"
-BACKUP="$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ)"
-install -d -o root -g root -m 0700 "$BACKUP"
+install -d -o root -g root -m 0700 "$DEST/backups"
+BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+chown root:root "$BACKUP"
+chmod 0700 "$BACKUP"
 for name in gateway.py README.md; do
   [ ! -e "$DEST/$name" ] || cp -p "$DEST/$name" "$BACKUP/$name"
 done

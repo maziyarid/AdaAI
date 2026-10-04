@@ -81,6 +81,30 @@ class BotHealthTests(unittest.TestCase):
         self.assert_unhealthy()
         self.assertFalse(db.exists())
 
+    def test_status_symlink_is_rejected(self):
+        ready = self.state / "ready.json"
+        target = self.state / "ready-target.json"
+        ready.rename(target)
+        ready.symlink_to(target.name)
+        result = self.assert_unhealthy()
+        self.assertIn("readiness_invalid", result["errors"])
+
+    def test_heartbeat_symlink_is_rejected(self):
+        heartbeat = self.state / "heartbeat.json"
+        target = self.state / "heartbeat-target.json"
+        heartbeat.rename(target)
+        heartbeat.symlink_to(target.name)
+        result = self.assert_unhealthy()
+        self.assertIn("heartbeat_invalid", result["errors"])
+
+    def test_database_symlink_is_rejected_even_when_target_is_valid(self):
+        database = self.state / "state.sqlite3"
+        target = self.state / "state-target.sqlite3"
+        database.rename(target)
+        database.symlink_to(target.name)
+        result = self.assert_unhealthy()
+        self.assertFalse(result["database_ok"])
+
     def test_corrupt_database_cannot_report_healthy(self):
         (self.state / "state.sqlite3").write_bytes(b"not a sqlite database")
         self.assert_unhealthy()

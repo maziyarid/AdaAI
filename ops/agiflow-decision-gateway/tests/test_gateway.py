@@ -256,6 +256,11 @@ def test_installer_rejects_unsafe_preexisting_gateway_account_contract():
     assert '[ "$gateway_groups" = "$expected_gid" ]' in script
     assert 'Gateway UID must not be shared.' in script
 
+def test_installer_uses_collision_resistant_rollback_directory():
+    script=(HERE/'install.sh').read_text()
+    assert 'install -d -o root -g root -m 0700 "$DEST/backups"' in script
+    assert 'BACKUP="$(mktemp -d "$DEST/backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"' in script
+
 def test_dangling_socket_symlink_is_rejected_without_unlinking(tmp_path):
     path=tmp_path/'decision.sock'
     path.symlink_to(tmp_path/'missing-target')

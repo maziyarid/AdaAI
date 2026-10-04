@@ -12,8 +12,31 @@ MAX_STATUS_BYTES = 4096
 DATABASE_BUDGET_SECONDS = 2.0
 
 
+def open_regular_no_follow(path):
+    try:
+        no_follow = os.O_NOFOLLOW
+    except AttributeError:
+        raise OSError("no-follow file opens are unsupported") from None
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | no_follow
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | no_follow
+    directory_fd = os.open(path.parent, directory_flags)
+    try:
+        fd = os.open(path.name, file_flags, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("state entry is not a regular file")
+        return fd, metadata
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def read_status(path):
-    with path.open("rb") as stream:
+    fd, _ = open_regular_no_follow(path)
+    with os.fdopen(fd, "rb", closefd=True) as stream:
         data = stream.read(MAX_STATUS_BYTES + 1)
     if len(data) > MAX_STATUS_BYTES:
         raise ValueError("status too large")
@@ -74,14 +97,18 @@ def inspect_health(state):
                 errors.append("process_unavailable")
 
     connection = None
+    database_fd = None
     try:
         database = state / "state.sqlite3"
-        metadata = database.stat()
-        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+        database_fd, metadata = open_regular_no_follow(database)
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
             raise ValueError("database permissions invalid")
+        # Use the already-open no-follow descriptor so a writable state directory
+        # cannot redirect health inspection through a symlink or path swap.
         # mode=ro never creates a missing database; do not use immutable=1,
         # which can ignore uncheckpointed WAL transactions.
-        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=DATABASE_BUDGET_SECONDS)
+        database_uri = f"file:/proc/self/fd/{database_fd}?mode=ro"
+        connection = sqlite3.connect(database_uri, uri=True, timeout=DATABASE_BUDGET_SECONDS)
         deadline = time.monotonic() + DATABASE_BUDGET_SECONDS
         connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         connection.execute("PRAGMA query_only=ON")
@@ -100,6 +127,8 @@ def inspect_health(state):
     finally:
         if connection is not None:
             connection.close()
+        if database_fd is not None:
+            os.close(database_fd)
 
     result["ok"] = bool(
         result["ready"] and result["process_alive"] and result["database_ok"] and not errors
