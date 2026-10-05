@@ -121,6 +121,43 @@ class BotRuntimeTests(unittest.TestCase):
         self.bot.handle(self.msg(update_id=2,text="/blocked"))
         self.assertIn("AAX-33",self.sent[-1][1])
 
+    def test_google_approval_commands_are_private_and_human_scoped(self):
+        self.pair()
+        ticket="123e4567-e89b-42d3-a456-426614174000"
+        self.bot.pending_approvals=lambda:[{
+          "ticket_id":ticket,"tool_name":"gtm.version.publish",
+          "resource_id":"accounts/1/containers/2","requested_by":"user-a","expires_at":"2026-10-05T12:00:00Z"
+        }]
+        self.bot.handle(self.msg(text="/approvals"))
+        self.assertIn(ticket,self.sent[-1][1])
+        self.assertIn("/approve",self.sent[-1][1])
+
+        calls=[]
+        self.bot.approval_command=lambda text,decision,user_id:calls.append((text,decision,user_id)) or "ثبت شد"
+        self.bot.handle(self.msg(update_id=2,text="/approve "+ticket))
+        self.bot.handle(self.msg(update_id=3,text="/deny "+ticket))
+        self.assertEqual(calls,[
+          ("/approve "+ticket,"grant",200),
+          ("/deny "+ticket,"deny",200),
+        ])
+
+        self.sent.clear()
+        self.bot.handle(self.msg(update_id=4,user=999,text="/approvals"))
+        self.assertEqual(self.sent,[])
+
+    def test_invalid_approval_id_never_calls_control_core(self):
+        called=[]
+        self.bot.approval_api=lambda *args,**kwargs:called.append((args,kwargs))
+        rendered=self.bot.approval_command("/approve not-a-ticket","grant",200)
+        self.assertIn("معتبر نیست",rendered)
+        self.assertEqual(called,[])
+
+    def test_telegram_bot_has_only_human_approval_token_not_broad_control_token(self):
+        source=BOT.read_text(encoding="utf-8")
+        self.assertIn("ADA_CONTROL_APPROVAL_TOKEN",source)
+        self.assertNotIn("CONTROL_API_TOKEN",source)
+
+
     def test_plain_english_text_reaches_chat_backend(self):
         self.pair()
         prompts=[]
