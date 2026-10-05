@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-HERE=pathlib.Path(__file__).resolve().parents[1]
+HERE=pathlib.Path(__file__).resolve().parent
 CLI=HERE/"ada-google-approval"
 
 class ApprovalCliTests(unittest.TestCase):
