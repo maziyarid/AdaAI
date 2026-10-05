@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "runtime" / "control-core-baseline" / "live" / "control_core.py"
+SOURCE = ROOT / "runtime" / "control-core-baseline" / "candidates" / "google-approval" / "control_core.py"
 
 pymysql = types.ModuleType("pymysql")
 pymysql.connect = lambda *args, **kwargs: None
@@ -257,7 +257,7 @@ def test_scoped_approval_tokens_payload_binding_and_one_time_consumption(monkeyp
         assert code == 200
         assert proof["payload_hash"] == payload["payload_hash"]
         assert proof["one_time_token"]
-        assert proof["one_time_token"] not in json.dumps(store.tickets[ticket_id])
+        assert proof["one_time_token"] not in core.jdump(store.tickets[ticket_id])
 
         wrong = {**proof, "payload_hash": "d" * 64}
         code, mismatch = request(base, f"/approvals/{ticket_id}/consume", "ms-robot-limited-token", "POST", wrong)
