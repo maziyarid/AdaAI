@@ -1,4 +1,4 @@
-import importlib.util
+import importlib.machinery, importlib.util
 import pathlib
 import tempfile
 import unittest
@@ -9,9 +9,10 @@ CLI=HERE/"ada-google-approval"
 
 class ApprovalCliTests(unittest.TestCase):
     def load(self):
-        spec=importlib.util.spec_from_file_location("approval_cli",CLI)
+        loader=importlib.machinery.SourceFileLoader("approval_cli",str(CLI))
+        spec=importlib.util.spec_from_loader(loader.name,loader)
         module=importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        loader.exec_module(module)
         return module
 
     def test_source_has_human_token_only_and_no_proof_consume_actions(self):
