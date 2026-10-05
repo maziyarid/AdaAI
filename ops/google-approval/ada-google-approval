@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Root/operator client for the scoped Google approval API.
+
+This client deliberately has no proof or consume command. It can only inspect,
+grant or deny approval tickets using CONTROL_APPROVAL_TOKEN.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+UUID_RE=re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
+DEFAULT_ENV="/etc/maziyar-control-core.env"
+DEFAULT_URL="http://127.0.0.1:8770"
+
+def env_file(path):
+    values={}
+    p=Path(path)
+    if not p.is_file(): raise SystemExit("control-core environment file is unavailable")
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line=raw.strip()
+        if not line or line.startswith("#") or "=" not in line: continue
+        key,value=line.split("=",1)
+        values[key.strip()]=value.strip().strip('"').strip("'")
+    return values
+
+def config(path=DEFAULT_ENV):
+    values=env_file(path)
+    token=values.get("CONTROL_APPROVAL_TOKEN","").strip()
+    if not token: raise SystemExit("CONTROL_APPROVAL_TOKEN is not configured")
+    raw=values.get("CONTROL_APPROVAL_URL",DEFAULT_URL).strip() or DEFAULT_URL
+    parsed=urllib.parse.urlparse(raw)
+    if parsed.scheme!="http" or parsed.hostname not in {"127.0.0.1","localhost","::1"}:
+        raise SystemExit("approval URL must be loopback HTTP")
+    return raw.rstrip("/"),token
+
+def call(path,method="GET",payload=None,env_path=DEFAULT_ENV):
+    base,token=config(env_path)
+    raw=None if payload is None else json.dumps(payload,separators=(",",":")).encode("utf-8")
+    headers={"Accept":"application/json","Authorization":"Bearer "+token,"User-Agent":"ada-google-approval/1.0"}
+    if raw is not None: headers["Content-Type"]="application/json"
+    request=urllib.request.Request(base+path,data=raw,headers=headers,method=method)
+    try:
+        with urllib.request.urlopen(request,timeout=12) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise SystemExit("approval API returned HTTP "+str(exc.code)) from None
+    except urllib.error.URLError:
+        raise SystemExit("approval API is unavailable") from None
+    except (json.JSONDecodeError,UnicodeDecodeError):
+        raise SystemExit("approval API returned invalid JSON") from None
+
+def ticket_id(value):
+    value=value.strip()
+    if not UUID_RE.fullmatch(value): raise argparse.ArgumentTypeError("invalid approval ticket UUID")
+    return value
+
+def render(row):
+    fields=[
+        ("ticket",row.get("ticket_id")),
+        ("state",row.get("state")),
+        ("action",row.get("tool_name")),
+        ("site",row.get("site_id")),
+        ("resource",row.get("resource_id")),
+        ("requester",row.get("requested_by")),
+        ("approved_by",row.get("approved_by")),
+        ("expires",row.get("expires_at")),
+    ]
+    return "\n".join(name+": "+str(value if value not in (None,"") else "—") for name,value in fields)
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(prog="ada-google-approval")
+    parser.add_argument("--env-file",default=DEFAULT_ENV)
+    sub=parser.add_subparsers(dest="command",required=True)
+    lp=sub.add_parser("list"); lp.add_argument("--state",default="PENDING",choices=["PENDING","GRANTED","DENIED","EXPIRED","CONSUMED"])
+    sp=sub.add_parser("show"); sp.add_argument("ticket",type=ticket_id)
+    gp=sub.add_parser("grant"); gp.add_argument("ticket",type=ticket_id); gp.add_argument("--approver",default=os.environ.get("SUDO_USER") or os.environ.get("USER") or "operator")
+    dp=sub.add_parser("deny"); dp.add_argument("ticket",type=ticket_id); dp.add_argument("--approver",default=os.environ.get("SUDO_USER") or os.environ.get("USER") or "operator")
+    args=parser.parse_args(argv)
+
+    if args.command=="list":
+        result=call("/approvals?state="+urllib.parse.quote(args.state)+"&limit=100",env_path=args.env_file)
+        rows=result.get("approvals") if isinstance(result,dict) else None
+        if not isinstance(rows,list): raise SystemExit("approval API response is invalid")
+        if not rows:
+            print("No approval tickets.")
+            return 0
+        print("\n\n".join(render(row) for row in rows))
+        return 0
+    if args.command=="show":
+        print(render(call("/approvals/"+args.ticket,env_path=args.env_file)))
+        return 0
+
+    action="grant" if args.command=="grant" else "deny"
+    result=call(
+        "/approvals/"+args.ticket+"/"+action,
+        "POST",
+        {"approver":str(args.approver)[:128]},
+        args.env_file,
+    )
+    print(render(result))
+    return 0
+
+if __name__=="__main__":
+    raise SystemExit(main())

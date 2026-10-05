@@ -1,24 +1,40 @@
 {
-  "captured_at": "2026-09-19T06:42:00Z",
+  "captured_at": "2026-10-05T12:39:48Z",
   "host": "server.maziyarid.com",
-  "profile": "grok-ada-readonly",
-  "role": "viewer",
-  "unix_user": "mistralops",
+  "profile": "sentinelx-cloud-core",
+  "role": "operator",
+  "unix_user": "root",
   "source_path": "/opt/maziyar-control-core/control_core.py",
   "unit_path": "/etc/systemd/system/maziyar-control-core.service",
-  "bytes": 65370,
-  "lines": 1096,
+  "bytes": 80970,
+  "lines": 1430,
   "mode_observed": "0555 root:root",
-  "mtime_observed": "2026-09-12 23:50:04 +0530",
-  "sha256_captured_bytes": "aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3",
-  "host_sha256sum": null,
-  "host_sha256sum_note": "sha256sum remains POLICY_DENIED on grok-ada-readonly. This hash is of viewer-cat captured bytes whose size matches live wc -c 65370.",
-  "live_show_tables": null,
-  "ada_star_in_source": false,
+  "mtime_observed": "2026-10-05 15:46:25.433541094 +0330",
+  "sha256_captured_bytes": "c414daf278048e7d88764a112605b39ab771a267aeac1880863383a6748b7e9a",
+  "host_sha256sum": "c414daf278048e7d88764a112605b39ab771a267aeac1880863383a6748b7e9a",
+  "host_sha256sum_note": "Verified directly on server.maziyarid.com after Google approval control-core promotion.",
+  "live_show_tables": {
+    "count": 42,
+    "ada_tables": [
+      "ada_approval_events",
+      "ada_approval_tickets",
+      "ada_external_inputs",
+      "ada_mutation_journal",
+      "ada_snapshots",
+      "ada_verifications"
+    ]
+  },
+  "ada_star_in_source": true,
   "pd_worker_runs_in_source": false,
   "pd_outbox_in_source": false,
   "clickup_state_steward_py": "mode-denied",
   "tool_harvester_py": "not captured this session",
-  "env_file": "unread",
-  "not_imported": ["venv/", "state/", "tools/", "*.bak*", "control_core.py.orig"]
+  "env_file": "keys inspected; values not captured",
+  "not_imported": [
+    "venv/",
+    "state/",
+    "tools/",
+    "*.bak*",
+    "control_core.py.orig"
+  ]
 }

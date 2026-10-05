@@ -28,6 +28,8 @@ READY_FILE=STATE_DIR/"ready.json"
 KILL_SWITCH=STATE_DIR/"commands.disabled"
 CHAT_URL=os.environ.get("ADA_CHAT_URL","http://127.0.0.1:9102/internal/chat").strip()
 AGIFLOW_READ_URL=os.environ.get("ADA_AGIFLOW_READ_URL","http://127.0.0.1:9102/internal/agiflow-read").strip()
+CONTROL_APPROVAL_URL=os.environ.get("ADA_CONTROL_APPROVAL_URL","http://127.0.0.1:8770").strip()
+CONTROL_APPROVAL_TOKEN=os.environ.get("ADA_CONTROL_APPROVAL_TOKEN","").strip()
 SYSTEM_PROMPT_FILE=Path(os.environ.get("ADA_SYSTEM_PROMPT","/opt/ada-telegram-bot/system_prompt.txt"))
 QALAM_RELEASE_FILE=Path(os.environ.get("ADA_QALAM_RELEASE","/opt/ada-telegram-bot/qalam-release.json"))
 def qalam_release_label():
@@ -311,6 +313,70 @@ def format_task_snapshot(data):
     return "\n".join(lines)
 
 
+def approval_api(path,method="GET",payload=None):
+    if not CONTROL_APPROVAL_TOKEN:
+        raise RuntimeError("approval_channel_not_configured")
+    url=urllib.parse.urlparse(CONTROL_APPROVAL_URL)
+    if url.scheme!="http" or url.hostname not in {"127.0.0.1","localhost","::1"}:
+        raise RuntimeError("approval_channel_must_be_loopback")
+    raw=None if payload is None else json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    headers={"Accept":"application/json","Authorization":"Bearer "+CONTROL_APPROVAL_TOKEN,"User-Agent":"AdaLLMbot/1.2"}
+    if raw is not None: headers["Content-Type"]="application/json"
+    req=urllib.request.Request(CONTROL_APPROVAL_URL.rstrip("/")+"/"+path.lstrip("/"),data=raw,headers=headers,method=method)
+    try:
+        with urllib.request.urlopen(req,timeout=12) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("approval_channel_http_"+str(exc.code)) from None
+    except urllib.error.URLError:
+        raise RuntimeError("approval_channel_unreachable") from None
+    except (json.JSONDecodeError,UnicodeDecodeError):
+        raise RuntimeError("approval_channel_invalid_response") from None
+
+
+def pending_approvals():
+    result=approval_api("/approvals?state=PENDING&limit=10")
+    rows=result.get("approvals") if isinstance(result,dict) else None
+    if not isinstance(rows,list): raise RuntimeError("approval_channel_invalid_response")
+    return rows
+
+
+def format_approvals(rows):
+    if not rows: return "درخواست تأیید فعالی وجود ندارد."
+    blocks=[]
+    for row in rows[:10]:
+        ticket=str(row.get("ticket_id") or "").strip()
+        action=str(row.get("tool_name") or "").strip()
+        resource=str(row.get("resource_id") or "").strip()
+        requester=str(row.get("requested_by") or "").strip()
+        expires=str(row.get("expires_at") or "").strip()
+        blocks.append(
+          "شناسه: "+ticket+"\n"
+          "اقدام: "+(action or "—")+"\n"
+          "منبع: "+(resource or "—")+"\n"
+          "درخواست‌دهنده: "+(requester or "—")+"\n"
+          "مهلت: "+(expires or "—")
+        )
+    return "درخواست‌های در انتظار تأیید:\n\n"+"\n\n".join(blocks)+"\n\nبرای تأیید: /approve <شناسه>\nبرای رد: /deny <شناسه>"
+
+
+def approval_command(text,decision,user_id):
+    parts=text.split()
+    if len(parts)!=2:
+        return "شناسهٔ درخواست لازم است. نمونه: /approve 123e4567-e89b-12d3-a456-426614174000"
+    ticket=parts[1].strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",ticket):
+        return "شناسهٔ درخواست معتبر نیست."
+    action="grant" if decision=="grant" else "deny"
+    result=approval_api("/approvals/"+urllib.parse.quote(ticket,safe="")+"/"+action,"POST",{"approver":"telegram:"+str(user_id)})
+    state=str(result.get("state") or "").upper() if isinstance(result,dict) else ""
+    if action=="grant" and state=="GRANTED":
+        return "درخواست تأیید شد. اجرای اقدام هنوز باید از مسیر امن Ms Robot انجام شود."
+    if action=="deny" and state=="DENIED":
+        return "درخواست رد شد و قابل اجرا نیست."
+    raise RuntimeError("approval_channel_invalid_response")
+
+
 DECISION_FORMAT_HELP="برای ثبت تصمیم بنویسید:\n/decision AAX-36 | تصمیم | دلیل\nفقط متن قابل انتشار در Agiflow را وارد کنید."
 DECISION_DISABLED_HELP="ثبت تصمیم فعلاً فعال نیست. تصمیم را در Agiflow ثبت کنید."
 DECISION_TOO_LONG_HELP="متن تصمیم و دلیل طولانی است. هر بخش را به کمتر از ۲۰۰۰ نویسه کوتاه کنید."
@@ -398,6 +464,9 @@ HELP=(
     "/tasks — کارهای فعال پروژه Ada/زیرساخت\n"
     "/blocked — کارهای مسدودشده پروژه Ada/زیرساخت\n"
     "/decision — ثبت تصمیم و دلیل برای یک کار در Agiflow\n"
+    "/approvals — نمایش اقدامات گوگل در انتظار تأیید\n"
+    "/approve <شناسه> — تأیید یک اقدام گوگل\n"
+    "/deny <شناسه> — رد یک اقدام گوگل\n"
     "/alerttest — تست مسیر هشدار\n"
     "/feedback — ثبت اصلاح زبانی برای بررسی بعدی\n"
     "/feedbackstatus — تعداد بازخوردهای ثبت‌شده\n"
@@ -492,6 +561,16 @@ def handle(update):
             log("agiflow_read_failed",level="warning",error_type=type(exc).__name__)
             send(chat_id,"فعلاً خواندن وضعیت Agiflow ممکن نیست؛ کمی بعد دوباره امتحان کنید.")
     elif command=="/decision": send(chat_id,queue_decision(update))
+    elif command=="/approvals":
+        try: send(chat_id,format_approvals(pending_approvals()))
+        except Exception as exc:
+            log("approval_read_failed",level="warning",error_type=type(exc).__name__)
+            send(chat_id,"فعلاً دریافت درخواست‌های تأیید ممکن نیست؛ کمی بعد دوباره بررسی کنید.")
+    elif command in ("/approve","/deny"):
+        try: send(chat_id,approval_command(text,"grant" if command=="/approve" else "deny",user_id))
+        except Exception as exc:
+            log("approval_decision_failed",level="warning",error_type=type(exc).__name__)
+            send(chat_id,"ثبت تصمیم انجام نشد. وضعیت درخواست را دوباره بررسی کنید.")
     elif command=="/id": send(chat_id,f"chat ID: {chat_id}\nuser ID: {user_id}")
     elif command=="/alerttest":
         qid=enqueue_alert("End-to-end AdaLLMbot alert path test.",idem_key=f"alerttest:{update.get('update_id')}",severity="info",source="AdaLLMbot")
@@ -527,6 +606,7 @@ def handle(update):
             send(chat_id,"فعلاً ارتباط با هسته گفت‌وگو برقرار نیست. کمی بعد دوباره امتحان کنید.")
 
     known_commands={"/start","/help","/ping","/status","/health","/tasks","/blocked",
+                    "/approvals","/approve","/deny",
                     "/id","/alerttest","/feedbackstatus","/feedback","/decision"}
     command_category=command if command in known_commands else ("unknown" if command else "chat")
     log("command_handled",command=command_category,chat_id=chat_id,user_id=user_id,update_id=update.get("update_id"))

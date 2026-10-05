@@ -56,21 +56,30 @@ def _src() -> str:
 def test_snapshot_bytes_and_captured_hash_match_manifest():
     man = json.loads(MANIFEST.read_text(encoding="utf-8"))
     raw = SOURCE.read_bytes()
-    assert len(raw) == 65370 == man["bytes"]
+    assert len(raw) == 80970 == man["bytes"]
     digest = hashlib.sha256(raw).hexdigest()
     assert digest == man["sha256_captured_bytes"]
-    assert digest == "aec6639acf761dfb01a72feb670b4d841c25fb1e8000abdea41bca0dcf4a94f3"
+    assert digest == "c414daf278048e7d88764a112605b39ab771a267aeac1880863383a6748b7e9a"
     assert _src().count("\n") == man["lines"]
-    assert man["host_sha256sum"] is None
-    assert man["live_show_tables"] is None
-    assert man["ada_star_in_source"] is False
+    assert man["host_sha256sum"] == digest
+    assert man["live_show_tables"]["count"] == 42
+    assert set(man["live_show_tables"]["ada_tables"]) == {
+        "ada_approval_events",
+        "ada_approval_tickets",
+        "ada_external_inputs",
+        "ada_mutation_journal",
+        "ada_snapshots",
+        "ada_verifications",
+    }
+    assert man["ada_star_in_source"] is True
 
 
-def test_source_schema_has_twenty_control_core_tables_and_no_ada_star():
+def test_source_schema_keeps_core_tables_inline_and_approval_schema_external():
     src = _src()
     tables = re.findall(r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", src)
     assert tables == EXPECTED_TABLES
-    assert "ada_" not in src
+    assert "ada_approval_tickets" in src
+    assert "ada_approval_events" in src
     assert "pd_worker_runs" not in src
     assert "pd_outbox" not in src
     assert "CREATE TABLE IF NOT EXISTS ada_" not in src
@@ -137,9 +146,14 @@ def test_credentials_are_env_names_not_literals():
     assert 'os.environ["CONTROL_DB_NAME"]' in src
     assert 'os.environ["MISTRAL_API_KEY"]' in src
     assert 'os.environ["CONTROL_API_TOKEN"]' in src
+    assert '"CONTROL_MS_ROBOT_TOKEN"' in src
+    assert '"CONTROL_APPROVAL_TOKEN"' in src
+    assert 'os.getenv("CONTROL_APPROVAL_SIGNING_KEY", "")' in src
+    assert 'def scoped_auth(self, env_name):' in src
     assert 'os.getenv("CONTROL_DB_HOST", "127.0.0.1")' in src
     assert re.search(r'CONTROL_DB_PASSWORD\s*=\s*["\'][^"\']+["\']', src) is None
     assert re.search(r'CONTROL_API_TOKEN\s*=\s*["\'][^"\']+["\']', src) is None
+    assert re.search(r'CONTROL_(?:MS_ROBOT_TOKEN|APPROVAL_TOKEN|APPROVAL_SIGNING_KEY)\s*=\s*["\'][^"\']+["\']', src) is None
     assert "BEGIN OPENSSH" not in src
     assert "sk-" not in src
 

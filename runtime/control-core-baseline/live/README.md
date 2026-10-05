@@ -1,42 +1,58 @@
-# Live control-core source snapshot (AAX-3)
+# Live control-core source snapshot
 
-Secret-free capture of `/opt/maziyar-control-core` from `server.maziyarid.com`
-via viewer profile `grok-ada-readonly` on 2026-09-19T06:42Z.
+Verified recapture of `/opt/maziyar-control-core` from `server.maziyarid.com`
+after the Google approval authority promotion on 2026-10-05.
 
-This directory is a **frozen import** of the production implementation so
-Ada reliability can target the actual control plane. It is not a second
-scheduler and must not be deployed beside MariaDB.
+This directory is the Git snapshot of the **deployed** control-core source. It is
+not a second scheduler or approval authority. Production remains
+`/opt/maziyar-control-core` on the VPS.
 
-## What is here
+## Verified production state
 
-- `control_core.py` — live binary of record (65370 bytes / 1096 lines)
-- `maziyar-control-core.service` — unit text (no EnvironmentFile values)
-- `MANIFEST.json` — capture metadata including SHA-256 of captured bytes
+- `control_core.py` — 80,970 bytes / 1,430 lines
+- SHA-256: `c414daf278048e7d88764a112605b39ab771a267aeac1880863383a6748b7e9a`
+- mode: `0555 root:root`
+- service: `maziyar-control-core.service`
+- listener: loopback-only through the existing control-core configuration
+- unauthenticated `/health`: HTTP 401 by design
+- unauthenticated `/approvals`: HTTP 401 by design
 
-## What is not here
+## Approval extension
 
-- `/etc/maziyar-control-core.env` values
-- `state/` and `tools/` (viewer mode-denied)
-- `clickup_state_steward.py` (mode-denied)
-- `venv/`
-- dated `.bak*` copies
-- live `SHOW TABLES` / systemd ActiveState (still gated; see AC3)
+The live source now references the durable ADA approval tables installed through
+the reviewed MariaDB migration. It does **not** create those tables inline.
 
-## Hash caveat
+Production MariaDB verification observed 42 tables, including:
 
-`sha256sum` is not on the viewer allowlist. `sha256_captured_bytes` is
-computed from the `cat` payload. Size matches live `wc -c`. Host inode
-hash remains unchecked until `ada-inspect hashes` is installed.
+- `ada_approval_tickets`
+- `ada_approval_events`
+- `ada_snapshots`
+- `ada_mutation_journal`
+- `ada_verifications`
+- `ada_external_inputs`
 
-## Schema / schedules
+Approval authority remains split by credential:
 
-Parsed from this snapshot, not from MariaDB:
+- `CONTROL_MS_ROBOT_TOKEN`: request/read/proof/consume path for Ms Robot
+- `CONTROL_APPROVAL_TOKEN`: human list/grant/deny path
+- `CONTROL_APPROVAL_SIGNING_KEY`: server-only one-time proof derivation
+- existing `CONTROL_API_TOKEN`: does not grant approval operations
 
-- 20 `CREATE TABLE IF NOT EXISTS` names (no `ada_*`, no `pd_worker_runs`,
-  no `pd_outbox`)
-- `create_job` uses `INSERT IGNORE` on unique `idempotency_key`
-- `claim_job` uses `FOR UPDATE SKIP LOCKED` and lease reclaim
-- `seed_schedules` registers six interval jobs (see tests)
+Secret values are not captured here.
 
-Do not execute this copy in the Ada App Builder sandbox. Production
-remains `/opt/maziyar-control-core` on the VPS.
+## Human approval surfaces
+
+The same authority can be operated through:
+
+- paired/private Ada Telegram commands when the Telegram bot credential is
+  configured;
+- the root/operator `ada-google-approval` CLI as the current fallback.
+
+The CLI deliberately cannot claim or consume approval proofs.
+
+## Source-of-truth note
+
+The previous September snapshot is superseded by this verified October
+recapture. The candidate under
+`runtime/control-core-baseline/candidates/google-approval/` remains useful as
+review history, but this `live/` directory now reflects execution truth.
