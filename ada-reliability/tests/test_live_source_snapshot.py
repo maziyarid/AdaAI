@@ -146,9 +146,10 @@ def test_credentials_are_env_names_not_literals():
     assert 'os.environ["CONTROL_DB_NAME"]' in src
     assert 'os.environ["MISTRAL_API_KEY"]' in src
     assert 'os.environ["CONTROL_API_TOKEN"]' in src
-    assert 'os.getenv("CONTROL_MS_ROBOT_TOKEN", "")' in src
-    assert 'os.getenv("CONTROL_APPROVAL_TOKEN", "")' in src
+    assert '"CONTROL_MS_ROBOT_TOKEN"' in src
+    assert '"CONTROL_APPROVAL_TOKEN"' in src
     assert 'os.getenv("CONTROL_APPROVAL_SIGNING_KEY", "")' in src
+    assert 'def scoped_auth(self, env_name):' in src
     assert 'os.getenv("CONTROL_DB_HOST", "127.0.0.1")' in src
     assert re.search(r'CONTROL_DB_PASSWORD\s*=\s*["\'][^"\']+["\']', src) is None
     assert re.search(r'CONTROL_API_TOKEN\s*=\s*["\'][^"\']+["\']', src) is None
