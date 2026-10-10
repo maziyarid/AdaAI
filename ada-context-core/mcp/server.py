@@ -3,7 +3,11 @@ import os
 import httpx
 from fastmcp import FastMCP
 
-CORE=os.environ.get('ADA_CORE_URL','http://127.0.0.1:8791')
+if __package__:
+    from .service_url import core_url
+else:
+    from service_url import core_url
+
 KEY=os.environ.get('ADA_INTERNAL_API_KEY','')
 if len(KEY)<32: raise RuntimeError('ADA_INTERNAL_API_KEY required')
 H={'X-Ada-Internal-Key':KEY}
@@ -11,16 +15,16 @@ mcp=FastMCP('Ada Context MCP')
 
 async def post(path,payload):
     async with httpx.AsyncClient(timeout=30) as c:
-        r=await c.post(CORE+path,json=payload,headers=H); r.raise_for_status(); return r.json()
+        r=await c.post(core_url(path),json=payload,headers=H); r.raise_for_status(); return r.json()
 async def get(path):
     async with httpx.AsyncClient(timeout=30) as c:
-        r=await c.get(CORE+path,headers=H); r.raise_for_status(); return r.json()
+        r=await c.get(core_url(path),headers=H); r.raise_for_status(); return r.json()
 
 @mcp.tool
 def context_status() -> dict:
     """Check authoritative Context Core health/version."""
     with httpx.Client(timeout=10) as c:
-        r=c.get(CORE+'/healthz'); r.raise_for_status(); return r.json()
+        r=c.get(core_url('/healthz')); r.raise_for_status(); return r.json()
 
 @mcp.tool
 async def context_bootstrap(agent_id:str,task_type:str,project_id:str|None=None,site_id:str|None=None,project_lane:str='main',task_run_id:str|None=None)->dict:

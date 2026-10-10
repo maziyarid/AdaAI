@@ -1,0 +1,2 @@
+# Draft app service root preserves the app.main package and relative imports.
+-r app/requirements.txt

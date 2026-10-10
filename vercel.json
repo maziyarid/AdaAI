@@ -1,0 +1,25 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "app": {
+      "root": "ada-context-core",
+      "framework": "fastapi",
+      "runtime": "python",
+      "entrypoint": "app.main:app"
+    },
+    "mcp": {
+      "root": "ada-context-core/mcp",
+      "runtime": "python",
+      "entrypoint": "vercel_entry:app",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "app",
+          "format": "url",
+          "env": "ADA_CORE_URL"
+        }
+      ]
+    }
+  },
+  "rewrites": []
+}
